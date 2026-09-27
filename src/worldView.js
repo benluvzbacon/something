@@ -608,6 +608,7 @@ export class WorldView {
       owner[i] = o;
       if (o >= 0) {
         c.setHex(this.world.civs[o].color);
+        { const hsl = {}; c.getHSL(hsl); c.setHSL(hsl.h, Math.max(hsl.s, 0.62), clamp(hsl.l, 0.42, 0.58)); }
         D[i * 4] = c.r * 255; D[i * 4 + 1] = c.g * 255; D[i * 4 + 2] = c.b * 255;
       } else {
         D[i * 4] = 255; D[i * 4 + 1] = 255; D[i * 4 + 2] = 255;

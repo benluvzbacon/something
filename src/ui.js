@@ -516,9 +516,11 @@ export class UI {
     // pick capitals + big cities
     let cities = [];
     if (show) {
+      const dist = g.camDistToPlanet();
+      const maxL = dist > 900 * WORLD_SCALE ? 7 : dist > 420 * WORLD_SCALE ? 10 : 14;
       cities = [...this.world.cities]
         .sort((a, b) => b.pop - a.pop)
-        .slice(0, 14);
+        .slice(0, maxL);
     }
     while (this.labelPool.length < cities.length) {
       const d = document.createElement('div');
@@ -532,6 +534,7 @@ export class UI {
     }
     const pp = g.planetView.planetWorldPos(new THREE.Vector3());
     const camDir = g.camera.position.clone().sub(pp).normalize();
+    const taken = [];
     const place = (d, wp) => {
       const dirW = wp.clone().sub(pp).normalize();
       if (dirW.dot(camDir) < 0.12) { d.style.display = 'none'; return false; }
@@ -539,6 +542,10 @@ export class UI {
       if (sp.z > 1) { d.style.display = 'none'; return false; }
       const x = (sp.x * 0.5 + 0.5) * innerWidth;
       const y = (-sp.y * 0.5 + 0.5) * innerHeight;
+      for (const t of taken) {
+        if (Math.abs(t[0] - x) < 120 && Math.abs(t[1] - y) < 52) { d.style.display = 'none'; return false; }
+      }
+      taken.push([x, y]);
       d.style.display = 'block';
       d.style.transform = `translate(${x.toFixed(0)}px,${y.toFixed(0)}px) translate(-50%,-140%)`;
       return true;

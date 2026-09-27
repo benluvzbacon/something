@@ -670,12 +670,13 @@ export class World {
       // expansion pressure (cooldown-paced so borders creep instead of flooding)
       const ruralCapNow = Math.max(60, ERAS[civ.era].rural * (4 + 2 * Math.sqrt(Math.max(0, civ._fert || 1))));
       const pressure = civ.rural / ruralCapNow;
-      const softCap = 14 + civ.era * 12;
+      const softCap = 10 + civ.era * 6;
       if (civ._expandIn === undefined) civ._expandIn = r.range(0.6, 1.6);
       civ._expandIn -= dt;
       if (civ._expandIn <= 0) {
         civ._expandIn = r.range(0.8, 2.2) / (0.5 + civ.personality.exp) / (0.6 + Math.min(1.5, pressure));
-        if (civ.territory.length > softCap * 2.2 && r.chance(0.7)) {
+        const sizeRatio = civ.territory.length / softCap;
+        if (sizeRatio > 3.2 || (sizeRatio > 1 && r.chance(Math.min(0.92, 1 - 1 / sizeRatio)))) {
           // overextended: restless provinces rather than new conquests
         } else {
         // claim a batch so borders advance in visible chunks, not single cells
@@ -693,12 +694,27 @@ export class World {
             cand.push(n);
           }
         }
-        if (cand.length) {
-          cand.sort((a, b) => this.cells[b].habit - this.cells[a].habit);
-          const pool = Math.min(cand.length, 4 + batch * 2);
+        // compact blobs: prefer cells near the capital, ignore far sprawl
+        const capCity = this.capitalOf(civ);
+        const capDir = capCity ? capCity.dir : null;
+        const maxRim = 0.30 + civ.era * 0.045;
+        const near = capDir ? cand.filter((i) => {
+          const cd = this.cells[i].dir;
+          return angDist(cd.x, cd.y, cd.z, capDir.x, capDir.y, capDir.z) <= maxRim;
+        }) : cand;
+        const use = near.length ? near : cand;
+        const score = (i) => {
+          const c = this.cells[i];
+          let s = c.habit;
+          if (capDir) s -= angDist(c.dir.x, c.dir.y, c.dir.z, capDir.x, capDir.y, capDir.z) * 1.6;
+          return s;
+        };
+        if (use.length) {
+          use.sort((a, b) => score(b) - score(a));
+          const pool = Math.min(use.length, 4 + batch * 2);
           const claimed = [];
           for (let k = 0; k < batch && claimed.length < pool; k++) {
-            const pick = cand[(r.next() * r.next() * pool) | 0];
+            const pick = use[(r.next() * r.next() * pool) | 0];
             if (this.cells[pick].owner === civ.id) continue;
             this.claimCell(civ, pick);
             claimed.push(pick);
@@ -779,8 +795,8 @@ export class World {
         }
       }
       // splinter nations: large / overextended empires can fracture
-      const overExt = civ.territory.length > softCap * 2.2;
-      if ((civ.territory.length > 90 || overExt) && civ.cities.length > 5 && r.chance((overExt ? 0.06 : 0.02) * (1.2 - civ.personality.uni))) {
+      const overExt = civ.territory.length > softCap * 1.6;
+      if ((civ.territory.length > 46 || overExt) && civ.cities.length > 3 && r.chance((overExt ? 0.12 : 0.05) * (1.2 - civ.personality.uni))) {
         this.splinter(civ);
       }
       // culture / religion events
@@ -796,6 +812,29 @@ export class World {
           const old = civ.gov;
           civ.gov = r.pick(GOV_BY_ERA[civ.era]);
           if (old !== civ.gov) this.log(`Year ${Math.floor(this.year)} — ${civ.name} reforms from a ${old} into a ${civ.gov}.`, 'civ', civ.id);
+        }
+      }
+    }
+
+    // border smoothing: surrounded enclaves get absorbed so blobs stay clean
+    for (let s = 0; s < 60; s++) {
+      const cell = r.pick(this.cells);
+      if (!cell || cell.ocean || cell.owner === -1) continue;
+      const landN = cell.neighbor.map((n) => this.cells[n]).filter((c) => !c.ocean);
+      if (!landN.length) continue;
+      const o0 = landN[0].owner;
+      if (o0 === -1 || o0 === cell.owner) continue;
+      if (!landN.every((c) => c.owner === o0)) continue;
+      const to = this.civs[o0];
+      if (!to || !to.alive) continue;
+      this.claimCell(to, cell.idx);
+      if (cell.city != null) {
+        const mc = this.cityById(cell.city);
+        if (mc && mc.civ !== o0) {
+          const from = this.civs[mc.civ];
+          if (from) from.cities = from.cities.filter((x) => x !== mc.id);
+          mc.civ = o0; to.cities.push(mc.id);
+          this.viewsDirty.cities = true;
         }
       }
     }
@@ -850,7 +889,7 @@ export class World {
   splinter(civ) {
     // farthest city breaks away as a new nation
     const cap = this.capitalOf(civ);
-    if (!cap || civ.cities.length < 4) return;
+    if (!cap || civ.cities.length < 3) return;
     let far = null, fd = -1;
     for (const id of civ.cities) {
       const c = this.cityById(id);
@@ -858,7 +897,7 @@ export class World {
       const d = angDist(c.dir.x, c.dir.y, c.dir.z, cap.dir.x, cap.dir.y, cap.dir.z);
       if (d > fd) { fd = d; far = c; }
     }
-    if (!far || fd < 0.25) return;
+    if (!far || fd < 0.16) return;
     const r = this.rng;
     const name = this.civName(r);
     const nc = {
