@@ -9,13 +9,13 @@ import { PLANET_R, WORLD_SCALE, ROTATION_SECONDS } from './world.js';
 
 const PS = WORLD_SCALE;
 
-export const MOON_R = 62;
-export const MOON_DIST = 1000;
+export const MOON_R = 70;
+export const MOON_DIST = 900;
 export const MOON_SCALE = MOON_R / 22;
 export const MOON_PERIOD = 300;          // seconds per lunar orbit at 1x
-export const ORBIT_DIST = 2600;          // planet→sun distance
+export const ORBIT_DIST = 16000;         // planet→sun distance
 export const ORBIT_PERIOD = ROTATION_SECONDS * 8; // one "year-orbit" per 8 days
-export const SUN_R = 170;
+export const SUN_R = 1200;               // the star dwarfs the planet, as it should
 
 function canvasTexture(w, h, draw) {
   const c = document.createElement('canvas');
@@ -84,7 +84,7 @@ export class PlanetView {
     for (let i = 0; i < N; i++) {
       const v = new THREE.Vector3(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1));
       if (v.lengthSq() < 1e-4) v.set(0.3, 0.4, 0.5);
-      v.normalize().multiplyScalar(22000);
+      v.normalize().multiplyScalar(60000);
       pos.set([v.x, v.y, v.z], i * 3);
       const t = r.next();
       const c = t < 0.7 ? [1, 1, 1] : t < 0.85 ? [0.7, 0.85, 1] : [1, 0.88, 0.72];
@@ -103,13 +103,13 @@ export class PlanetView {
   buildSun() {
     this.sunGroup = new THREE.Group();
     // fiery granulation texture so the disc isn't flat
-    const sunTex = canvasTexture(256, 256, (ctx, w, h) => {
+    const sunTex = canvasTexture(512, 512, (ctx, w, h) => {
       const r = new RNG(4242);
       const base = ctx.createLinearGradient(0, 0, 0, h);
       base.addColorStop(0, '#ffe9a8'); base.addColorStop(0.5, '#ffd27a'); base.addColorStop(1, '#ffb454');
       ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
-      for (let i = 0; i < 700; i++) {
-        const x = r.range(0, w), y = r.range(0, h), rad = r.range(2, 9);
+      for (let i = 0; i < 1500; i++) {
+        const x = r.range(0, w), y = r.range(0, h), rad = r.range(3, 16);
         const hot = r.chance(0.4);
         const g = ctx.createRadialGradient(x, y, 0.5, x, y, rad);
         g.addColorStop(0, hot ? 'rgba(255,250,225,0.8)' : 'rgba(255,120,40,0.55)');
@@ -117,8 +117,8 @@ export class PlanetView {
         ctx.fillStyle = g;
         ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
       }
-      for (let i = 0; i < 7; i++) { // sunspots
-        const x = r.range(0, w), y = r.range(h * 0.25, h * 0.75), rad = r.range(4, 10);
+      for (let i = 0; i < 9; i++) { // sunspots
+        const x = r.range(0, w), y = r.range(h * 0.25, h * 0.75), rad = r.range(7, 18);
         ctx.fillStyle = 'rgba(160,70,20,0.7)';
         ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
         ctx.fillStyle = 'rgba(90,35,10,0.8)';
@@ -139,7 +139,7 @@ export class PlanetView {
       ctx.fillRect(0, 0, 256, 256);
     });
     this.sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, transparent: true }));
-    this.sunGlow.scale.set(SUN_R * 7, SUN_R * 7, 1);
+    this.sunGlow.scale.set(SUN_R * 6, SUN_R * 6, 1);
     this.sunGroup.add(this.sunGlow);
     // horizontal lens-flare streak
     const flareTex = canvasTexture(256, 64, (ctx, w, h) => {
@@ -150,7 +150,7 @@ export class PlanetView {
       ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
     });
     this.sunFlare = new THREE.Sprite(new THREE.SpriteMaterial({ map: flareTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, transparent: true, opacity: 0.7 }));
-    this.sunFlare.scale.set(SUN_R * 9, SUN_R * 1.6, 1);
+    this.sunFlare.scale.set(SUN_R * 6, SUN_R * 1.1, 1);
     this.sunGroup.add(this.sunFlare);
     this.scene.add(this.sunGroup);
   }
@@ -171,7 +171,7 @@ export class PlanetView {
   }
 
   buildTerrain() {
-    const W = 256, H = 256;
+    const W = 288, H = 288;
     const geo = new THREE.SphereGeometry(PLANET_R, W, H);
     const pos = geo.attributes.position;
     const colors = new Float32Array(pos.count * 3);
@@ -359,19 +359,21 @@ export class PlanetView {
   }
 
   buildMoon() {
-    const tex = canvasTexture(512, 256, (ctx, w, h) => {
+    const tex = canvasTexture(1024, 512, (ctx, w, h) => {
       const r = new RNG(9001);
       ctx.fillStyle = '#9a9a9c'; ctx.fillRect(0, 0, w, h);
       // maria (dark patches)
-      for (let i = 0; i < 14; i++) {
+      for (let i = 0; i < 18; i++) {
         const x = r.range(0, w), y = r.range(h * 0.2, h * 0.8), rad = r.range(20, 70);
         const g = ctx.createRadialGradient(x, y, 2, x, y, rad);
         g.addColorStop(0, 'rgba(70,70,74,0.55)'); g.addColorStop(1, 'rgba(70,70,74,0)');
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
       }
       // craters
-      for (let i = 0; i < 420; i++) {
-        const x = r.range(0, w), y = r.range(0, h), rad = r.range(1, 12) * (r.next() < 0.08 ? 2.2 : 1);
+      const raySpots = [];
+      for (let i = 0; i < 950; i++) {
+        const x = r.range(0, w), y = r.range(0, h), rad = r.range(1, 14) * (r.next() < 0.08 ? 2.4 : 1);
+        if (rad > 22 && raySpots.length < 7) raySpots.push([x, y, rad]);
         ctx.fillStyle = 'rgba(60,60,64,0.5)';
         ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
         ctx.fillStyle = 'rgba(210,210,215,0.45)';
@@ -379,8 +381,25 @@ export class PlanetView {
         ctx.fillStyle = 'rgba(120,120,126,0.6)';
         ctx.beginPath(); ctx.arc(x, y, rad * 0.55, 0, TAU); ctx.fill();
       }
+      // bright ray systems around the biggest impacts
+      for (const [rx, ry] of raySpots) {
+        const nRays = 9 + ((r.next() * 5) | 0);
+        for (let k = 0; k < nRays; k++) {
+          const a = (k / nRays) * TAU + r.range(-0.15, 0.15);
+          const len = r.range(60, 200);
+          const g2 = ctx.createLinearGradient(rx, ry, rx + Math.cos(a) * len, ry + Math.sin(a) * len);
+          g2.addColorStop(0, 'rgba(235,235,240,0.5)');
+          g2.addColorStop(1, 'rgba(235,235,240,0)');
+          ctx.strokeStyle = g2;
+          ctx.lineWidth = r.range(2, 5);
+          ctx.beginPath();
+          ctx.moveTo(rx, ry);
+          ctx.lineTo(rx + Math.cos(a) * len, ry + Math.sin(a) * len);
+          ctx.stroke();
+        }
+      }
       // speckle
-      for (let i = 0; i < 3000; i++) {
+      for (let i = 0; i < 6000; i++) {
         ctx.fillStyle = r.chance(0.5) ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.07)';
         ctx.fillRect(r.range(0, w), r.range(0, h), 1.5, 1.5);
       }
@@ -431,7 +450,7 @@ export class PlanetView {
   buildComet() {
     // eccentric visitor; mostly far away, occasionally swings by
     this.cometGroup = new THREE.Group();
-    const head = new THREE.Mesh(new THREE.SphereGeometry(3 * PS, 12, 12), new THREE.MeshBasicMaterial({ color: 0xeaf6ff, fog: false }));
+    const head = new THREE.Mesh(new THREE.SphereGeometry(5 * PS, 12, 12), new THREE.MeshBasicMaterial({ color: 0xeaf6ff, fog: false }));
     this.cometGroup.add(head);
     const tailTex = canvasTexture(128, 128, (ctx) => {
       const g = ctx.createLinearGradient(0, 64, 128, 64);
@@ -439,8 +458,8 @@ export class PlanetView {
       ctx.fillStyle = g; ctx.fillRect(0, 40, 128, 48);
     });
     this.cometTail = new THREE.Sprite(new THREE.SpriteMaterial({ map: tailTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
-    this.cometTail.scale.set(220 * PS, 40 * PS, 1);
-    this.cometTail.position.set(-110 * PS, 0, 0);
+    this.cometTail.scale.set(360 * PS, 64 * PS, 1);
+    this.cometTail.position.set(-180 * PS, 0, 0);
     this.cometGroup.add(this.cometTail);
     this.cometGroup.visible = false;
     this.scene.add(this.cometGroup);
@@ -523,7 +542,7 @@ export class PlanetView {
 
     // living sun: breathing glow, drifting flare, slow surface turn
     const puls = 1 + 0.025 * Math.sin(this.time * 2.1) + 0.018 * Math.sin(this.time * 3.7);
-    this.sunGlow.scale.set(SUN_R * 7 * puls, SUN_R * 7 * puls, 1);
+    this.sunGlow.scale.set(SUN_R * 6 * puls, SUN_R * 6 * puls, 1);
     this.sunFlare.material.rotation += dtReal * 0.05;
     this.sunMesh.rotation.y += dtReal * 0.012;
 

@@ -75,20 +75,33 @@ function spiralTexture() {
   c.width = c.height = 256;
   const ctx = c.getContext('2d');
   ctx.translate(128, 128);
-  for (let arm = 0; arm < 3; arm++) {
-    for (let i = 0; i < 46; i++) {
-      const t = i / 46;
-      const a = t * 4.2 + arm * (TAU / 3);
-      const rad = 12 + t * 105;
+  for (let arm = 0; arm < 4; arm++) {
+    for (let i = 0; i < 70; i++) {
+      const t = i / 70;
+      const a = t * 5.1 + arm * (TAU / 4);
+      const rad = 26 + t * 96;
       const x = Math.cos(a) * rad, y = Math.sin(a) * rad;
-      const r = 26 * (1 - t * 0.6);
+      const r = 24 * (1 - t * 0.55);
+      const dens = 0.28 + 0.5 * (1 - t);
       const g = ctx.createRadialGradient(x, y, 1, x, y, r);
-      g.addColorStop(0, 'rgba(255,255,255,0.5)');
+      g.addColorStop(0, `rgba(255,255,255,${dens.toFixed(2)})`);
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
     }
   }
+  // bright eyewall ring + clear eye
+  const wall = ctx.createRadialGradient(0, 0, 10, 0, 0, 27);
+  wall.addColorStop(0, 'rgba(255,255,255,0)');
+  wall.addColorStop(0.55, 'rgba(255,255,255,0.95)');
+  wall.addColorStop(0.85, 'rgba(255,255,255,0.55)');
+  wall.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = wall;
+  ctx.beginPath(); ctx.arc(0, 0, 27, 0, TAU); ctx.fill();
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath(); ctx.arc(0, 0, 12, 0, TAU); ctx.fill();
+  ctx.restore();
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -181,15 +194,21 @@ export class WorldView {
       this.cityGroup.add(m);
       return m;
     };
-    // hut: round mud-brick base + thatch cone roof
+    // hut: mud-brick base + thatch roof + hide door
     const hutGeo = mergeGeometries([
-      part(new THREE.CylinderGeometry(0.38 * S, 0.45 * S, 0.5 * S, 8), 0, 0.25 * S, 0),
-      part(new THREE.ConeGeometry(0.62 * S, 0.75 * S, 8), 0, 0.85 * S, 0),
+      paint(part(new THREE.CylinderGeometry(0.38 * S, 0.45 * S, 0.5 * S, 10), 0, 0.25 * S, 0), 0xd8c4a8),
+      paint(part(new THREE.ConeGeometry(0.64 * S, 0.78 * S, 10), 0, 0.86 * S, 0), 0x8a6b4a),
+      paint(part(new THREE.CylinderGeometry(0.09 * S, 0.09 * S, 0.3 * S, 6), 0, 0.2 * S, 0.40 * S), 0x241f18),
+      paint(part(new THREE.BoxGeometry(0.2 * S, 0.3 * S, 0.08 * S), 0, 0.15 * S, 0.40 * S), 0x241f18),
     ]);
-    // house: plaster body + pyramid tile roof
+    // house: plaster body + overhang tile roof + chimney + door + windows
     const houseGeo = mergeGeometries([
-      part(new THREE.BoxGeometry(0.72 * S, 0.5 * S, 0.72 * S), 0, 0.25 * S, 0),
-      part(new THREE.ConeGeometry(0.60 * S, 0.45 * S, 4), 0, 0.72 * S, 0, Math.PI / 4),
+      paint(part(new THREE.BoxGeometry(0.72 * S, 0.5 * S, 0.72 * S), 0, 0.25 * S, 0), 0xf2ede2),
+      paint(part(new THREE.ConeGeometry(0.66 * S, 0.48 * S, 4), 0, 0.74 * S, 0, Math.PI / 4), 0x9a5a40),
+      paint(part(new THREE.BoxGeometry(0.13 * S, 0.4 * S, 0.13 * S), 0.2 * S, 0.85 * S, -0.12 * S), 0x7a4a38),
+      paint(part(new THREE.BoxGeometry(0.16 * S, 0.28 * S, 0.05 * S), -0.12 * S, 0.16 * S, 0.365 * S), 0x2a3542),
+      paint(part(new THREE.BoxGeometry(0.13 * S, 0.12 * S, 0.05 * S), 0.16 * S, 0.33 * S, 0.365 * S), 0x1c2836),
+      paint(part(new THREE.BoxGeometry(0.13 * S, 0.12 * S, 0.05 * S), -0.16 * S, 0.36 * S, -0.365 * S, Math.PI), 0x1c2836),
     ]);
     // city block + cornice, window facade
     const blockGeo = mergeGeometries([
@@ -205,52 +224,59 @@ export class WorldView {
     const towerGeo = mergeGeometries([towerWin, towerAnt], true);
     // dome habitat + door + skylight cap
     const domeGeo = mergeGeometries([
-      part(new THREE.SphereGeometry(0.9 * S, 14, 10, 0, TAU, 0, Math.PI / 2), 0, 0, 0),
-      part(new THREE.BoxGeometry(0.4 * S, 0.5 * S, 0.25 * S), 0, 0.25 * S, 0.82 * S),
-      part(new THREE.SphereGeometry(0.22 * S, 10, 8), 0, 0.92 * S, 0),
+      paint(part(new THREE.SphereGeometry(0.9 * S, 16, 12, 0, TAU, 0, Math.PI / 2), 0, 0, 0), 0xdfe8f2),
+      paint(part(new THREE.BoxGeometry(0.4 * S, 0.5 * S, 0.25 * S), 0, 0.25 * S, 0.82 * S), 0x33414f),
+      paint(part(new THREE.SphereGeometry(0.22 * S, 10, 8), 0, 0.92 * S, 0), 0xffc37a),
+      paint(part(new THREE.CylinderGeometry(0.95 * S, 1.0 * S, 0.12 * S, 16), 0, 0.06 * S, 0), 0x8b95a1),
     ]);
-    // launch complex: pad + gantry + fuel sphere
+    // launch complex: pad + gantry + arm + fuel sphere + tank + beacon
     const padGeo = mergeGeometries([
-      part(new THREE.CylinderGeometry(1.6 * S, 1.8 * S, 0.3 * S, 14), 0, 0.15 * S, 0),
-      part(new THREE.BoxGeometry(0.28 * S, 2.6 * S, 0.28 * S), 1.25 * S, 1.45 * S, 0),
-      part(new THREE.BoxGeometry(0.9 * S, 0.16 * S, 0.16 * S), 0.9 * S, 2.5 * S, 0),
-      part(new THREE.SphereGeometry(0.55 * S, 12, 10), -1.15 * S, 0.7 * S, 0.7 * S),
+      paint(part(new THREE.CylinderGeometry(1.6 * S, 1.8 * S, 0.3 * S, 16), 0, 0.15 * S, 0), 0x9aa2ab),
+      paint(part(new THREE.BoxGeometry(0.28 * S, 2.6 * S, 0.28 * S), 1.25 * S, 1.45 * S, 0), 0xb03a2e),
+      paint(part(new THREE.BoxGeometry(0.9 * S, 0.16 * S, 0.16 * S), 0.9 * S, 2.5 * S, 0), 0xd8d8d8),
+      paint(part(new THREE.SphereGeometry(0.12 * S, 8, 6), 1.25 * S, 2.85 * S, 0), 0xff2a2a),
+      paint(part(new THREE.SphereGeometry(0.55 * S, 12, 10), -1.15 * S, 0.7 * S, 0.7 * S), 0xe0e4e8),
+      paint(part(new THREE.CylinderGeometry(0.3 * S, 0.3 * S, 0.8 * S, 10), -1.15 * S, 0.4 * S, -0.8 * S), 0xc3ccd4),
     ]);
     // defensive wall segment + merlons
     const wallGeo = mergeGeometries([
-      part(new THREE.BoxGeometry(1.6 * S, 0.7 * S, 0.35 * S), 0, 0.35 * S, 0),
-      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), -0.55 * S, 0.8 * S, 0),
-      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0, 0.8 * S, 0),
-      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0.55 * S, 0.8 * S, 0),
+      paint(part(new THREE.BoxGeometry(1.6 * S, 0.7 * S, 0.35 * S), 0, 0.35 * S, 0), 0x9a938a),
+      paint(part(new THREE.BoxGeometry(1.62 * S, 0.1 * S, 0.38 * S), 0, 0.72 * S, 0), 0xb3aca2),
+      paint(part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), -0.55 * S, 0.86 * S, 0), 0xa8a19a),
+      paint(part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0, 0.86 * S, 0), 0xa8a19a),
+      paint(part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0.55 * S, 0.86 * S, 0), 0xa8a19a),
     ]);
     // trees: trunk + two-tier canopy (two meshes sharing matrices)
     const trunkGeo = part(new THREE.CylinderGeometry(0.09 * S, 0.14 * S, 0.7 * S, 6), 0, 0.35 * S, 0);
     const canopyGeo = mergeGeometries([
-      part(new THREE.ConeGeometry(0.6 * S, 1.1 * S, 7), 0, 1.1 * S, 0),
-      part(new THREE.ConeGeometry(0.42 * S, 0.8 * S, 7), 0, 1.75 * S, 0),
+      part(new THREE.ConeGeometry(0.72 * S, 0.9 * S, 8), 0, 0.75 * S, 0),
+      part(new THREE.ConeGeometry(0.6 * S, 1.1 * S, 7), 0, 1.25 * S, 0),
+      part(new THREE.ConeGeometry(0.42 * S, 0.8 * S, 7), 0, 1.85 * S, 0),
     ]);
-    // boat: hull + bow + cabin + mast
+    // boat: hull + bow + cabin + mast + yard + canvas sail
     const boatGeo = mergeGeometries([
-      part(new THREE.BoxGeometry(0.55 * S, 0.4 * S, 1.5 * S), 0, 0.2 * S, 0),
-      part(new THREE.ConeGeometry(0.32 * S, 0.55 * S, 4), 0, 0.2 * S, 0.95 * S, 0, Math.PI / 2),
-      part(new THREE.BoxGeometry(0.4 * S, 0.35 * S, 0.4 * S), 0, 0.55 * S, -0.25 * S),
-      part(new THREE.CylinderGeometry(0.035 * S, 0.035 * S, 1.2 * S, 5), 0, 1.1 * S, 0.15 * S),
+      paint(part(new THREE.BoxGeometry(0.55 * S, 0.4 * S, 1.5 * S), 0, 0.2 * S, 0), 0x6b4a2f),
+      paint(part(new THREE.ConeGeometry(0.32 * S, 0.55 * S, 4), 0, 0.2 * S, 0.95 * S, 0, Math.PI / 2), 0x6b4a2f),
+      paint(part(new THREE.BoxGeometry(0.4 * S, 0.35 * S, 0.4 * S), 0, 0.55 * S, -0.35 * S), 0xe8e0d0),
+      paint(part(new THREE.CylinderGeometry(0.035 * S, 0.045 * S, 1.2 * S, 5), 0, 1.1 * S, 0.15 * S), 0x4a3728),
+      paint(part(new THREE.CylinderGeometry(0.03 * S, 0.03 * S, 0.9 * S, 5), 0, 1.6 * S, -0.05 * S, 0, 0, Math.PI / 2), 0x4a3728),
+      paint(part(new THREE.BoxGeometry(0.05 * S, 0.85 * S, 0.75 * S), 0, 1.12 * S, -0.05 * S), 0xf3ecd8),
     ]);
 
-    this.imHut = mk(hutGeo, std(), 3500);
-    this.imHouse = mk(houseGeo, std({ roughness: 0.8 }), 9000);
+    this.imHut = mk(hutGeo, std({ vertexColors: true }), 3500);
+    this.imHouse = mk(houseGeo, std({ roughness: 0.8, vertexColors: true }), 9000);
     const { map: winMap, emissive: winEm } = facadeTextures();
     this.imBlock = mk(blockGeo, std({ map: winMap, emissiveMap: winEm, emissive: 0xffc37a, emissiveIntensity: 0.9 }), 7000);
     this.imTower = mk(towerGeo, [
       std({ map: winMap, emissiveMap: winEm, emissive: 0xffc37a, emissiveIntensity: 1.0 }),
       std({ color: 0x2a2f36, roughness: 0.5, metalness: 0.6 }),
     ], 5000);
-    this.imDome = mk(domeGeo, std({ color: 0xdfe8f2, roughness: 0.35, metalness: 0.35 }), 500);
-    this.imPad = mk(padGeo, std({ color: 0x9aa2ab, roughness: 0.6 }), 48);
-    this.imWall = mk(wallGeo, std({ color: 0x8d8578 }), 2500);
+    this.imDome = mk(domeGeo, std({ roughness: 0.35, metalness: 0.35, vertexColors: true }), 500);
+    this.imPad = mk(padGeo, std({ roughness: 0.6, vertexColors: true }), 48);
+    this.imWall = mk(wallGeo, std({ roughness: 0.9, vertexColors: true }), 2500);
     this.imTrunk = mk(trunkGeo, std({ color: 0x5a4030, roughness: 1 }), 6000);
     this.imCanopy = mk(canopyGeo, std({ roughness: 0.95 }), 6000);
-    this.imBoat = mk(boatGeo, std({ roughness: 0.7 }), 160);
+    this.imBoat = mk(boatGeo, std({ roughness: 0.7, vertexColors: true }), 160);
   }
 
   styleForEra(era) {
@@ -318,10 +344,10 @@ export class WorldView {
         let done = false;
         const sc = 0.8 + crng.next() * 0.5 + Math.min(1.2, Math.log10(Math.max(10, city.pop)) * 0.14);
         if (roll < mix[0]) {
-          tmpC.setHSL(0.08, 0.35, 0.28 + crng.next() * 0.12);
+          tmpC.setHSL(0.08, 0.32, 0.55 + crng.next() * 0.25);
           done = put(0, bx, by, bz, _v1, yaw, sc, sc, sc, tmpC);
         } else if (roll < mix[0] + mix[1]) {
-          tmpC.setHSL(era >= 6 ? 0.6 : 0.09, era >= 6 ? 0.08 : 0.3, 0.35 + crng.next() * 0.25);
+          tmpC.setHSL(era >= 6 ? 0.6 : 0.09, era >= 6 ? 0.08 : 0.22, 0.68 + crng.next() * 0.3);
           done = put(1, bx, by, bz, _v1, yaw, sc, sc * (0.85 + crng.next() * 0.4), sc, tmpC);
         } else if (roll < mix[0] + mix[1] + mix[2]) {
           tmpC.setHSL(0.08 + crng.next() * 0.04, 0.12, 0.55 + crng.next() * 0.3);
@@ -447,7 +473,7 @@ export class WorldView {
       orientUp(_v1, yaw, _q);
       _m.compose(_v2.copy(_v1).multiplyScalar(PLANET_R + h), _q, _s.set(b.sc, b.sc, b.sc));
       this.imBoat.setMatrixAt(n, _m);
-      this.imBoat.setColorAt(n, c.setHSL(0.08 + (n % 5) * 0.04, 0.45, 0.42));
+      this.imBoat.setColorAt(n, c.setHSL(0.08 + (n % 5) * 0.02, 0.22, 0.78 + (n % 3) * 0.07));
       n++;
     }
     this.imBoat.count = n;
@@ -542,10 +568,10 @@ export class WorldView {
     this.pv.terrainMesh.material.onBeforeCompile = (sh) => {
       sh.uniforms.uTerr = { value: terrTex };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec2 vTerrUv;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrUv = uv;');
+        .replace('#include <common>', '#include <common>\nvarying vec2 vTerrUv;\nvarying vec3 vTerrW;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrUv = uv;\nvTerrW = (modelMatrix * vec4(transformed,1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D uTerr;\nvarying vec2 vTerrUv;')
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uTerr;\nvarying vec2 vTerrUv;\nvarying vec3 vTerrW;')
         .replace('#include <map_fragment>', `#include <map_fragment>
         {
           vec4 terr = texture2D(uTerr, vTerrUv);
@@ -554,6 +580,13 @@ export class WorldView {
             vec3 tint = mix(terr.rgb, vec3(0.04,0.02,0.06), border * 0.8);
             diffuseColor.rgb = mix(diffuseColor.rgb, tint, border > 0.5 ? 0.9 : 0.78);
           }
+          // fine surface grain + large-scale mottling (stops flat CG look)
+          vec3 cellp = floor(vTerrW * 1.2);
+          float gr = fract(sin(dot(cellp, vec3(12.9898,78.233,37.719))) * 43758.5453);
+          diffuseColor.rgb *= 0.93 + gr * 0.11;
+          vec3 cellp2 = floor(vTerrW * 0.15);
+          float m2 = fract(sin(dot(cellp2, vec3(4.123,55.11,21.7))) * 24634.63);
+          diffuseColor.rgb *= 0.96 + m2 * 0.08;
         }`);
     };
     this.pv.terrainMesh.material.needsUpdate = true;
@@ -705,26 +738,33 @@ export class WorldView {
 
   // -- wildlife -------------------------------------------------------------------------
   buildAnimals() {
-    // critter: rounded body + head + ears
+    // critter: rounded body + head + ears + legs + tail
     const critterGeo = mergeGeometries([
-      part(new THREE.SphereGeometry(0.32 * S, 10, 8), 0, 0.35 * S, 0),
-      part(new THREE.SphereGeometry(0.16 * S, 8, 6), 0, 0.58 * S, 0.42 * S),
-      part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), 0.09 * S, 0.72 * S, 0.40 * S),
-      part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), -0.09 * S, 0.72 * S, 0.40 * S),
+      paint(part(new THREE.SphereGeometry(0.32 * S, 10, 8), 0, 0.35 * S, 0), 0xffffff),
+      paint(part(new THREE.SphereGeometry(0.16 * S, 8, 6), 0, 0.58 * S, 0.42 * S), 0xf2f2f2),
+      paint(part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), 0.09 * S, 0.72 * S, 0.40 * S), 0xd8d8d8),
+      paint(part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), -0.09 * S, 0.72 * S, 0.40 * S), 0xd8d8d8),
+      paint(part(new THREE.CylinderGeometry(0.05 * S, 0.04 * S, 0.32 * S, 6), 0.14 * S, 0.12 * S, 0.15 * S), 0xc8c8c8),
+      paint(part(new THREE.CylinderGeometry(0.05 * S, 0.04 * S, 0.32 * S, 6), -0.14 * S, 0.12 * S, 0.15 * S), 0xc8c8c8),
+      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.045 * S, 0.34 * S, 6), 0.14 * S, 0.12 * S, -0.16 * S), 0xc8c8c8),
+      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.045 * S, 0.34 * S, 6), -0.14 * S, 0.12 * S, -0.16 * S), 0xc8c8c8),
+      paint(part(new THREE.ConeGeometry(0.05 * S, 0.28 * S, 6), 0, 0.42 * S, -0.36 * S, 0, -Math.PI / 2.4), 0xe2e2e2),
     ]);
     critterGeo.scale(1, 0.85, 1.35);
-    const m = new THREE.MeshLambertMaterial({});
+    const m = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.imFauna = new THREE.InstancedMesh(critterGeo, m, 700);
     this.imFauna.frustumCulled = false;
     this.imFauna.count = 0;
     this.spin.add(this.imFauna);
-    // bird: dart body + swept wings + tail
+    // bird: dart body + dihedral wings + fanned tail + pale belly
     const birdGeo = mergeGeometries([
-      part(new THREE.ConeGeometry(0.14 * S, 0.6 * S, 6), 0, 0, 0.1 * S, 0, Math.PI / 2),
-      part(new THREE.BoxGeometry(0.85 * S, 0.045 * S, 0.26 * S), 0, 0.05 * S, -0.05 * S),
-      part(new THREE.BoxGeometry(0.24 * S, 0.04 * S, 0.28 * S), 0, 0.02 * S, -0.42 * S),
+      paint(part(new THREE.ConeGeometry(0.14 * S, 0.6 * S, 6), 0, 0, 0.1 * S, 0, Math.PI / 2), 0xdde4ea),
+      paint(part(new THREE.BoxGeometry(0.5 * S, 0.045 * S, 0.26 * S), 0.3 * S, 0.1 * S, -0.05 * S, 0, 0, 0.4), 0xc9d2d9),
+      paint(part(new THREE.BoxGeometry(0.5 * S, 0.045 * S, 0.26 * S), -0.3 * S, 0.1 * S, -0.05 * S, 0, 0, -0.4), 0xc9d2d9),
+      paint(part(new THREE.SphereGeometry(0.11 * S, 8, 6), 0, -0.05 * S, 0.1 * S), 0xffffff),
+      paint(part(new THREE.BoxGeometry(0.24 * S, 0.04 * S, 0.28 * S), 0, 0.02 * S, -0.42 * S), 0xb9c2c9),
     ]);
-    const bm = new THREE.MeshBasicMaterial({ color: 0xf2f4f6 });
+    const bm = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
     this.imBirds = new THREE.InstancedMesh(birdGeo, bm, 220);
     this.imBirds.frustumCulled = false;
     this.imBirds.count = 0;
@@ -873,6 +913,9 @@ export class WorldView {
     const finG = new THREE.BoxGeometry(0.12 * S, 0.9 * S, 0.55 * S);
     const bellG = new THREE.CylinderGeometry(0.3 * S, 0.48 * S, 0.45 * S, 10);
     const portG = new THREE.SphereGeometry(0.16 * S, 10, 8);
+    const bandTopG = new THREE.CylinderGeometry(0.47 * S, 0.475 * S, 0.2 * S, 12);
+    const bandLowG = new THREE.CylinderGeometry(0.505 * S, 0.51 * S, 0.2 * S, 12);
+    const glowDiscG = new THREE.CircleGeometry(0.34 * S, 12);
     this.flameTex = glowTexture('rgba(255,200,120,1)', 'rgba(255,120,40,0)');
     for (let i = 0; i < 6; i++) {
       const g = new THREE.Group();
@@ -887,6 +930,13 @@ export class WorldView {
       bell.position.y = -0.2 * S;
       const port = new THREE.Mesh(portG, new THREE.MeshStandardMaterial({ color: 0x0b1520, emissive: 0x7dd3fc, emissiveIntensity: 1.2, roughness: 0.2 }));
       port.position.set(0, 1.9 * S, 0.4 * S);
+      const band1 = new THREE.Mesh(bandTopG, accent);
+      band1.position.y = 2.3 * S;
+      const band2 = new THREE.Mesh(bandLowG, dark);
+      band2.position.y = 0.55 * S;
+      const nozzleGlow = new THREE.Mesh(glowDiscG, new THREE.MeshBasicMaterial({ color: 0xffc36b, transparent: true, opacity: 0.95, fog: false }));
+      nozzleGlow.position.y = -0.42 * S;
+      nozzleGlow.rotation.x = Math.PI / 2;
       for (let f = 0; f < 3; f++) {
         const fin = new THREE.Mesh(finG, accent);
         const a = (f / 3) * TAU;
@@ -900,10 +950,10 @@ export class WorldView {
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.flameTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
       glow.scale.set(4 * S, 4 * S, 1);
       glow.position.y = -1.2 * S;
-      g.add(body, nose, bell, port, flame, glow);
+      g.add(body, nose, bell, port, band1, band2, nozzleGlow, flame, glow);
       g.visible = false;
       this.scene.add(g);
-      this.rockets.push({ g, flame, glow, active: false, t: 0, dur: 55, from: new THREE.Vector3(), ctrl: new THREE.Vector3(), mission: '', civ: -1 });
+      this.rockets.push({ g, flame, glow, nozzleGlow, active: false, t: 0, dur: 55, from: new THREE.Vector3(), ctrl: new THREE.Vector3(), mission: '', civ: -1 });
     }
   }
 
@@ -957,6 +1007,7 @@ export class WorldView {
       const burning = t < 0.55;
       r.flame.visible = burning;
       r.glow.visible = burning;
+      r.nozzleGlow.visible = burning;
       if (burning) {
         const f = 0.8 + Math.random() * 0.5;
         r.flame.scale.set(f, f * (1 + Math.random() * 0.4), f);
@@ -977,10 +1028,16 @@ export class WorldView {
     this.pivot.add(this.satGroup);
     this.sats = [];
     this.satGeo = mergeGeometries([
-      paint(part(new THREE.BoxGeometry(0.8 * S, 0.8 * S, 0.8 * S), 0, 0, 0), 0xcfd6dd),
-      paint(part(new THREE.BoxGeometry(2.6 * S, 0.08 * S, 1.0 * S), 0, 0, 0), 0x2a55c4),
-      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.06 * S, 0.8 * S, 6), 0, 0.7 * S, 0), 0x8a929a),
-      paint(part(new THREE.SphereGeometry(0.34 * S, 10, 6, 0, TAU, 0, 0.7), 0, 1.1 * S, 0, 0, 0.6), 0xe8ecf0),
+      paint(part(new THREE.BoxGeometry(0.8 * S, 0.8 * S, 0.8 * S), 0, 0, 0), 0xc9a227),
+      paint(part(new THREE.BoxGeometry(0.86 * S, 0.3 * S, 0.86 * S), 0, -0.55 * S, 0), 0x8a929a),
+      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.06 * S, 3.4 * S, 6), 0, 0, 0, 0, 0, Math.PI / 2), 0x8a929a),
+      paint(part(new THREE.BoxGeometry(1.3 * S, 0.08 * S, 1.1 * S), 1.05 * S, 0, 0), 0x2244aa),
+      paint(part(new THREE.BoxGeometry(1.3 * S, 0.08 * S, 1.1 * S), -1.05 * S, 0, 0), 0x2244aa),
+      paint(part(new THREE.BoxGeometry(1.34 * S, 0.05 * S, 0.08 * S), 1.05 * S, 0, 0.55 * S), 0xd8dce2),
+      paint(part(new THREE.BoxGeometry(1.34 * S, 0.05 * S, 0.08 * S), -1.05 * S, 0, 0.55 * S), 0xd8dce2),
+      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.06 * S, 0.9 * S, 6), 0, 0.8 * S, 0), 0x8a929a),
+      paint(part(new THREE.SphereGeometry(0.36 * S, 10, 6, 0, TAU, 0, 0.7), 0, 1.25 * S, 0, 0, 0.6), 0xe8ecf0),
+      paint(part(new THREE.SphereGeometry(0.12 * S, 8, 6), 0, 0.48 * S, 0), 0xff2a2a),
     ]);
     this.satMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.65, roughness: 0.3, emissive: 0x0a1230, emissiveIntensity: 0.5 });
   }
@@ -1072,12 +1129,48 @@ export class WorldView {
     const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.45 * MS, 10, 8), this.beaconMat);
     beacon.position.set(-8 * MS, 7.2 * MS, -4 * MS);
     this.baseGroup.add(beacon);
-    // ground lights
+    // floodlight poles with emissive globes
+    const poleM = new THREE.MeshStandardMaterial({ color: 0x555c66, roughness: 0.6, metalness: 0.6 });
+    const globeM = new THREE.MeshBasicMaterial({ color: 0xcfeaff, fog: false });
+    const poleSpots = [[-4, 2], [3, -3], [6, 3], [-1, -6], [10, -2]];
+    for (const [px, pz] of poleSpots) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1 * MS, 0.12 * MS, 3 * MS, 6), poleM);
+      pole.position.set(px * MS, 1.5 * MS, pz * MS);
+      this.baseGroup.add(pole);
+      const globe = new THREE.Mesh(new THREE.SphereGeometry(0.32 * MS, 10, 8), globeM);
+      globe.position.set(px * MS, 3.1 * MS, pz * MS);
+      this.baseGroup.add(globe);
+    }
+    // parked rover: chassis + mast + dish
+    const roverM = new THREE.MeshStandardMaterial({ color: 0xd8c26a, roughness: 0.55, metalness: 0.45 });
+    const rover = new THREE.Group();
+    const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.6 * MS, 0.5 * MS, 1.0 * MS), roverM);
+    chassis.position.y = 0.7 * MS;
+    rover.add(chassis);
+    const wheelG = new THREE.CylinderGeometry(0.32 * MS, 0.32 * MS, 0.25 * MS, 10);
+    const wheelM = new THREE.MeshStandardMaterial({ color: 0x2c2f33, roughness: 0.9 });
+    for (const [wx, wz] of [[-0.6, 0.5], [0.6, 0.5], [-0.6, -0.5], [0.6, -0.5]]) {
+      const w = new THREE.Mesh(wheelG, wheelM);
+      w.rotation.x = Math.PI / 2;
+      w.position.set(wx * MS, 0.32 * MS, wz * MS);
+      rover.add(w);
+    }
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * MS, 0.05 * MS, 1.0 * MS, 6), poleM);
+    mast.position.set(-0.5 * MS, 1.4 * MS, 0);
+    rover.add(mast);
+    const rdish = new THREE.Mesh(new THREE.SphereGeometry(0.4 * MS, 10, 6, 0, TAU, 0, 0.7), this.domeM);
+    rdish.position.set(-0.5 * MS, 1.95 * MS, 0);
+    rdish.rotation.x = 0.6;
+    rover.add(rdish);
+    rover.position.set(4 * MS, 0, 6 * MS);
+    rover.rotation.y = 0.7;
+    this.baseGroup.add(rover);
+    // ground lights (soft round additive points)
     const lg = new THREE.BufferGeometry();
     const pts = [];
     for (let i = 0; i < 30; i++) pts.push(r.range(-10, 12) * MS, 0.3 * MS, r.range(-7, 7) * MS);
     lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
-    const lm = new THREE.PointsMaterial({ color: 0x9fd8ff, size: 0.7 * MS, transparent: true, opacity: 0.9, fog: false });
+    const lm = new THREE.PointsMaterial({ color: 0x9fd8ff, size: 1.1 * MS, map: glowTexture('rgba(200,230,255,1)', 'rgba(120,180,255,0)'), transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
     this.baseGroup.add(new THREE.Points(lg, lm));
   }
 
@@ -1142,11 +1235,13 @@ export class WorldView {
   buildEffects() {
     this.effects = [];
     this.flashTex = glowTexture('rgba(255,230,180,1)', 'rgba(255,140,60,0)');
+    this.sparkTex = glowTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)');
+    this.puffTex = glowTexture('rgba(255,255,255,0.85)', 'rgba(255,255,255,0)');
     for (let i = 0; i < 16; i++) {
-      const N = 70;
+      const N = 110;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-      const mat = new THREE.PointsMaterial({ size: 1.6 * S, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending });
+      const mat = new THREE.PointsMaterial({ size: 1.6 * S, map: this.sparkTex, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false;
       pts.visible = false;
@@ -1159,7 +1254,7 @@ export class WorldView {
   spawnEffect(type, dirLocal, scale = 1) {
     const e = this.effects.find((x) => !x.active);
     if (!e) return null;
-    const N = 70;
+    const N = 110;
     const pos = e.pts.geometry.attributes.position.array;
     const h = 1.2 * S;
     const t1 = new THREE.Vector3(), t2 = new THREE.Vector3();
@@ -1184,6 +1279,8 @@ export class WorldView {
     e.pts.material.color.setHex(cfg.c);
     e.pts.material.size = cfg.size * S * scale;
     e.pts.material.blending = (type === 'smoke') ? THREE.NormalBlending : THREE.AdditiveBlending;
+    e.pts.material.map = (type === 'smoke' || type === 'terraform' || type === 'splash' || type === 'godForest') ? this.puffTex : this.sparkTex;
+    e.pts.material.needsUpdate = false;
     e.life = cfg.life; e.maxLife = cfg.life;
     e.grav = cfg.grav * S; e.active = true;
     e.pts.visible = true;
@@ -1211,7 +1308,7 @@ export class WorldView {
     const e = this.spawnEffect(type === 'arrivalFlash' ? 'arrivalFlash' : 'explosion', dir, scale);
     if (e) {
       const pos = e.pts.geometry.attributes.position.array;
-      for (let i = 0; i < 70; i++) {
+      for (let i = 0; i < 110; i++) {
         pos[i * 3] += (local.x - dir.x * (PLANET_R + 1.2 * S));
         pos[i * 3 + 1] += (local.y - dir.y * (PLANET_R + 1.2 * S));
         pos[i * 3 + 2] += (local.z - dir.z * (PLANET_R + 1.2 * S));
@@ -1227,7 +1324,7 @@ export class WorldView {
       e.life -= dt;
       if (e.life <= 0) { e.active = false; e.pts.visible = false; continue; }
       const pos = e.pts.geometry.attributes.position.array;
-      for (let i = 0; i < 70; i++) {
+      for (let i = 0; i < 110; i++) {
         _v1.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).normalize();
         e.vel[i * 3] -= _v1.x * e.grav * dt;
         e.vel[i * 3 + 1] -= _v1.y * e.grav * dt;

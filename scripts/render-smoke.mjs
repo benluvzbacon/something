@@ -32,13 +32,17 @@ const { WorldView } = await import('../src/worldView.js');
 console.log('\n=== TERRASIM render smoke (headless) ===\n');
 const seed = 20260704;
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 60000);
-camera.position.set(2600, 400, 600);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 200000);
 
 const planet = new PlanetData(seed);
 const world = new World(planet, seed, { cellCount: 500, civCount: 6 });
 const pv = new PlanetView(scene, planet, seed);
 const wv = new WorldView(scene, pv, world);
+// frame the planet (it now orbits far from the origin)
+{
+  const pp = pv.planetWorldPos(new THREE.Vector3());
+  camera.position.copy(pp).add(new THREE.Vector3(2400, 500, 700));
+}
 wv.rebuildCities();
 wv.rebuildTerritory();
 wv.syncFauna();

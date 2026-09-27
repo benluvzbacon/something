@@ -68,7 +68,7 @@ class Game {
     this.controls.enablePan = false;
     this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
     this.controls.minDistance = 3.2 * WORLD_SCALE;
-    this.controls.maxDistance = 22000;
+    this.controls.maxDistance = 45000;
     this.controls.zoomSpeed = 1.15;
     this.controls.addEventListener('start', () => { this.camTween = null; });
 
@@ -348,8 +348,9 @@ class Game {
       this.ui.switchTab('inspect');
     } else if (name === 'system') {
       this.setFollow({ kind: 'planet' });
-      const to = pp.clone().add(new THREE.Vector3(900, 1900, 2400).multiplyScalar(WORLD_SCALE));
-      this.flyTo(to, pp, 2.6);
+      // pull far enough back to frame the planet, moon orbit, and the huge sun
+      const dir = new THREE.Vector3(0.32, 0.62, 0.72).normalize();
+      this.flyTo(pp.clone().addScaledVector(dir, 20000), pp, 2.6);
     }
   }
 
@@ -493,7 +494,7 @@ class Game {
     // dynamic depth range for seamless surface→system zoom
     const distT = this.camera.position.distanceTo(this.controls.target);
     this.camera.near = clamp(distT / 500, 0.05, 40);
-    this.camera.far = Math.max(30000, distT * 8);
+    this.camera.far = Math.max(120000, distT * 8);
     this.camera.updateProjectionMatrix();
     this.controls.update();
 
