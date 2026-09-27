@@ -5,10 +5,13 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { RNG, TAU, clamp } from './noise.js';
-import { PLANET_R, ROTATION_SECONDS } from './world.js';
+import { PLANET_R, WORLD_SCALE, ROTATION_SECONDS } from './world.js';
 
-export const MOON_R = 22;
-export const MOON_DIST = 330;
+const PS = WORLD_SCALE;
+
+export const MOON_R = 34;
+export const MOON_DIST = 530;
+export const MOON_SCALE = MOON_R / 22;
 export const MOON_PERIOD = 300;          // seconds per lunar orbit at 1x
 export const ORBIT_DIST = 2600;          // planet→sun distance
 export const ORBIT_PERIOD = ROTATION_SECONDS * 8; // one "year-orbit" per 8 days
@@ -58,7 +61,7 @@ export class PlanetView {
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     const sc = this.sunLight.shadow.camera;
-    sc.left = -140; sc.right = 140; sc.top = 140; sc.bottom = -140;
+    sc.left = -140 * PS; sc.right = 140 * PS; sc.top = 140 * PS; sc.bottom = -140 * PS;
     sc.near = 1; sc.far = 8000;
     this.sunLight.shadow.bias = -0.0004;
     this.sunLight.shadow.normalBias = 1.5;
@@ -70,7 +73,7 @@ export class PlanetView {
     this.scene.add(this.moonLight.target);
     this.hemi = new THREE.HemisphereLight(0xbcd3ff, 0x3a2f26, 0.35);
     this.scene.add(this.hemi);
-    this.scene.fog = new THREE.FogExp2(0x0a1428, 0.0011);
+    this.scene.fog = new THREE.FogExp2(0x0a1428, 0.0011 / PS);
   }
 
   buildStars() {
@@ -99,7 +102,30 @@ export class PlanetView {
 
   buildSun() {
     this.sunGroup = new THREE.Group();
-    const mat = new THREE.MeshBasicMaterial({ color: 0xfff3cf, fog: false });
+    // fiery granulation texture so the disc isn't flat
+    const sunTex = canvasTexture(256, 256, (ctx, w, h) => {
+      const r = new RNG(4242);
+      const base = ctx.createLinearGradient(0, 0, 0, h);
+      base.addColorStop(0, '#ffe9a8'); base.addColorStop(0.5, '#ffd27a'); base.addColorStop(1, '#ffb454');
+      ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 700; i++) {
+        const x = r.range(0, w), y = r.range(0, h), rad = r.range(2, 9);
+        const hot = r.chance(0.4);
+        const g = ctx.createRadialGradient(x, y, 0.5, x, y, rad);
+        g.addColorStop(0, hot ? 'rgba(255,250,225,0.8)' : 'rgba(255,120,40,0.55)');
+        g.addColorStop(1, 'rgba(255,150,60,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
+      }
+      for (let i = 0; i < 7; i++) { // sunspots
+        const x = r.range(0, w), y = r.range(h * 0.25, h * 0.75), rad = r.range(4, 10);
+        ctx.fillStyle = 'rgba(160,70,20,0.7)';
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, TAU); ctx.fill();
+        ctx.fillStyle = 'rgba(90,35,10,0.8)';
+        ctx.beginPath(); ctx.arc(x, y, rad * 0.55, 0, TAU); ctx.fill();
+      }
+    });
+    const mat = new THREE.MeshBasicMaterial({ map: sunTex, fog: false });
     this.sunMesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_R, 48, 48), mat);
     this.sunGroup.add(this.sunMesh);
     // glow sprite
@@ -115,6 +141,17 @@ export class PlanetView {
     this.sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, transparent: true }));
     this.sunGlow.scale.set(SUN_R * 7, SUN_R * 7, 1);
     this.sunGroup.add(this.sunGlow);
+    // horizontal lens-flare streak
+    const flareTex = canvasTexture(256, 64, (ctx, w, h) => {
+      const g = ctx.createLinearGradient(0, 0, w, 0);
+      g.addColorStop(0, 'rgba(255,200,130,0)');
+      g.addColorStop(0.5, 'rgba(255,225,170,0.85)');
+      g.addColorStop(1, 'rgba(255,200,130,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    });
+    this.sunFlare = new THREE.Sprite(new THREE.SpriteMaterial({ map: flareTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, transparent: true, opacity: 0.7 }));
+    this.sunFlare.scale.set(SUN_R * 9, SUN_R * 1.6, 1);
+    this.sunGroup.add(this.sunFlare);
     this.scene.add(this.sunGroup);
   }
 
@@ -134,7 +171,7 @@ export class PlanetView {
   }
 
   buildTerrain() {
-    const W = 220, H = 220;
+    const W = 256, H = 256;
     const geo = new THREE.SphereGeometry(PLANET_R, W, H);
     const pos = geo.attributes.position;
     const colors = new Float32Array(pos.count * 3);
@@ -185,7 +222,7 @@ export class PlanetView {
   }
 
   buildOcean() {
-    const geo = new THREE.SphereGeometry(PLANET_R + 0.10, 128, 128);
+    const geo = new THREE.SphereGeometry(PLANET_R + 0.10 * PS, 160, 160);
     this.oceanUniforms = {
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(1, 0, 0) },
@@ -348,8 +385,8 @@ export class PlanetView {
         ctx.fillRect(r.range(0, w), r.range(0, h), 1.5, 1.5);
       }
     });
-    const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 });
-    this.moonMesh = new THREE.Mesh(new THREE.SphereGeometry(MOON_R, 64, 64), mat);
+    const mat = new THREE.MeshStandardMaterial({ map: tex, bumpMap: tex, bumpScale: 1.4, roughness: 1, metalness: 0 });
+    this.moonMesh = new THREE.Mesh(new THREE.SphereGeometry(MOON_R, 72, 72), mat);
     this.moonMesh.castShadow = true;
     this.moonMesh.receiveShadow = true;
     this.moonHolder = new THREE.Group();
@@ -394,7 +431,7 @@ export class PlanetView {
   buildComet() {
     // eccentric visitor; mostly far away, occasionally swings by
     this.cometGroup = new THREE.Group();
-    const head = new THREE.Mesh(new THREE.SphereGeometry(3, 12, 12), new THREE.MeshBasicMaterial({ color: 0xeaf6ff, fog: false }));
+    const head = new THREE.Mesh(new THREE.SphereGeometry(3 * PS, 12, 12), new THREE.MeshBasicMaterial({ color: 0xeaf6ff, fog: false }));
     this.cometGroup.add(head);
     const tailTex = canvasTexture(128, 128, (ctx) => {
       const g = ctx.createLinearGradient(0, 64, 128, 64);
@@ -402,8 +439,8 @@ export class PlanetView {
       ctx.fillStyle = g; ctx.fillRect(0, 40, 128, 48);
     });
     this.cometTail = new THREE.Sprite(new THREE.SpriteMaterial({ map: tailTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
-    this.cometTail.scale.set(220, 40, 1);
-    this.cometTail.position.set(-110, 0, 0);
+    this.cometTail.scale.set(220 * PS, 40 * PS, 1);
+    this.cometTail.position.set(-110 * PS, 0, 0);
     this.cometGroup.add(this.cometTail);
     this.cometGroup.visible = false;
     this.scene.add(this.cometGroup);
@@ -475,14 +512,20 @@ export class PlanetView {
 
     // shadows only matter near the surface
     const camDist = camera.position.distanceTo(pp);
-    this.sunLight.castShadow = camDist < 900;
+    this.sunLight.castShadow = camDist < 900 * PS;
 
     // fog color follows day/night at camera focus
     const focusDir = PlanetView._v8.copy(camera.position).sub(pp).normalize();
     const elev = focusDir.dot(sunDir);
     const dayMix = clamp(elev * 2.2 + 0.45, 0, 1);
     this.scene.fog.color.setRGB(0.04 + 0.35 * dayMix, 0.06 + 0.42 * dayMix, 0.12 + 0.50 * dayMix);
-    this.scene.fog.density = 0.0011;
+    this.scene.fog.density = 0.0011 / PS;
+
+    // living sun: breathing glow, drifting flare, slow surface turn
+    const puls = 1 + 0.025 * Math.sin(this.time * 2.1) + 0.018 * Math.sin(this.time * 3.7);
+    this.sunGlow.scale.set(SUN_R * 7 * puls, SUN_R * 7 * puls, 1);
+    this.sunFlare.material.rotation += dtReal * 0.05;
+    this.sunMesh.rotation.y += dtReal * 0.012;
 
     // comet flyby
     if (this.cometT >= 0) {
@@ -494,7 +537,7 @@ export class PlanetView {
         const k = this.cometT / T; // 0→1
         const a = Math.PI * (0.15 + k * 0.9);
         const rad = ORBIT_DIST * (1.15 - 0.5 * Math.sin(k * Math.PI));
-        this.cometGroup.position.set(Math.cos(a + this.orbitAngle) * rad, 260 * Math.sin(k * Math.PI), Math.sin(a + this.orbitAngle) * rad);
+        this.cometGroup.position.set(Math.cos(a + this.orbitAngle) * rad, 260 * PS * Math.sin(k * Math.PI), Math.sin(a + this.orbitAngle) * rad);
         // tail points away from sun
         this.cometTail.material.opacity = Math.sin(k * Math.PI);
       }

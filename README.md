@@ -59,8 +59,8 @@ npm run smoke
 
 | Input | Action |
 |---|---|
-| Drag / wheel / right-drag | Orbit / zoom / pan |
-| W A S D · Q / E · Shift | Fly camera (fast with Shift) |
+| Left-drag / right-drag / wheel | Orbit / orbit / zoom (camera always faces the planet) |
+| W A S D · Q / E · Shift | Orbit around / zoom out & in (fast with Shift) |
 | Click | Inspect city / nation / wilds / Moon / Sun |
 | Space | Pause · `1–8` speed presets · `Esc` deselect |
 | Left toolbar | God powers — pick one, click the planet |

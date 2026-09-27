@@ -5,9 +5,9 @@
 // no DOM) so it can run headless in Node for testing.
 // ---------------------------------------------------------------------------
 import { RNG, clamp, lerp, TAU } from './noise.js';
-import { PlanetData, PLANET_R, B, BIOME_INFO, isOceanBiome } from './planetData.js';
+import { PlanetData, PLANET_R, WORLD_SCALE, B, BIOME_INFO, isOceanBiome } from './planetData.js';
 
-export { PlanetData, PLANET_R, B, BIOME_INFO, isOceanBiome };
+export { PlanetData, PLANET_R, WORLD_SCALE, B, BIOME_INFO, isOceanBiome };
 
 // ---- Time model ------------------------------------------------------------
 // A full planetary rotation (visual day+night) lasts 20 real minutes at 1x and

@@ -111,8 +111,8 @@ export class UI {
         <div class="help-card glass">
           <h2>How to play</h2>
           <div class="help-grid">
-            <div><b>🖱️ Drag</b> orbit · <b>Wheel</b> zoom · <b>Right-drag</b> pan</div>
-            <div><b>W A S D</b> move · <b>Q / E</b> down / up · <b>Shift</b> fast</div>
+            <div><b>🖱️ Left-drag / Right-drag</b> orbit · <b>Wheel</b> zoom — the camera always faces the planet</div>
+            <div><b>W A S D</b> orbit · <b>Q / E</b> zoom out / in · <b>Shift</b> fast</div>
             <div><b>Click</b> a city, nation or wilds to inspect · <b>Esc</b> deselect</div>
             <div><b>Space</b> pause · <b>1–9,0,-</b> speed presets</div>
             <div><b>God powers</b> (left bar): pick one, then click the planet</div>

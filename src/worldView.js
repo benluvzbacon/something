@@ -1,12 +1,18 @@
 // ---------------------------------------------------------------------------
-// worldView.js — renders the living world: instanced cities that evolve by
-// era, territory, night lights, wildlife, citizens, weather sprites, rockets,
-// satellites, lunar bases, disaster/god-power effects.
+// worldView.js — renders the living world: detailed instanced cities that
+// evolve by era, forests, boats, territory, night lights, wildlife, citizens,
+// weather sprites, rockets, satellites, lunar bases, disaster/god-power FX.
+// All model sizes scale with WORLD_SCALE so the bigger planet stays in
+// proportion.
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
-import { RNG, TAU, clamp, lerp } from './noise.js';
-import { PLANET_R, ERAS, B } from './world.js';
-import { MOON_R } from './planetView.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RNG, TAU, clamp } from './noise.js';
+import { PLANET_R, WORLD_SCALE, B } from './world.js';
+import { MOON_R, MOON_SCALE } from './planetView.js';
+
+const S = WORLD_SCALE;   // planet surface scale (1.6)
+const MS = MOON_SCALE;   // moon scale (~1.55)
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -33,6 +39,23 @@ function tangentBasis(d, out1, out2) {
   out1.crossVectors(_up, ref).normalize();
   out2.crossVectors(_up, out1).normalize();
   return _up;
+}
+
+// geometry helpers ---------------------------------------------------------------
+function part(geo, x = 0, y = 0, z = 0, ry = 0, rx = 0, rz = 0) {
+  if (rx) geo.rotateX(rx);
+  if (rz) geo.rotateZ(rz);
+  if (ry) geo.rotateY(ry);
+  geo.translate(x, y, z);
+  return geo;
+}
+function paint(geo, hex) {
+  const c = new THREE.Color(hex);
+  const n = geo.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) arr.set([c.r, c.g, c.b], i * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
 }
 
 function glowTexture(inner, outer) {
@@ -71,6 +94,38 @@ function spiralTexture() {
   return t;
 }
 
+// Facade texture with lit windows (map + emissive pair so towers glow at night)
+function facadeTextures() {
+  const W = 128, H = 160;
+  const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
+  const ec = document.createElement('canvas'); ec.width = W; ec.height = H;
+  const m = mc.getContext('2d'), e = ec.getContext('2d');
+  const r = new RNG(777);
+  const base = m.createLinearGradient(0, 0, 0, H);
+  base.addColorStop(0, '#4a5462'); base.addColorStop(1, '#2b323d');
+  m.fillStyle = base; m.fillRect(0, 0, W, H);
+  e.fillStyle = '#000'; e.fillRect(0, 0, W, H);
+  const cols = 6, rows = 10;
+  for (let cx = 0; cx < cols; cx++) for (let cy = 0; cy < rows; cy++) {
+    const x = 8 + cx * ((W - 16) / cols), y = 8 + cy * ((H - 16) / rows);
+    const w = (W - 16) / cols - 5, h = (H - 16) / rows - 5;
+    const lit = r.next() < 0.55;
+    if (lit) {
+      const warm = r.range(0.75, 1);
+      m.fillStyle = `rgb(${255 * warm | 0},${205 * warm | 0},${130 * warm | 0})`;
+      m.fillRect(x, y, w, h);
+      e.fillStyle = `rgb(${255 * warm | 0},${190 * warm | 0},${110 * warm | 0})`;
+      e.fillRect(x, y, w, h);
+    } else {
+      m.fillStyle = r.chance(0.5) ? '#141a24' : '#1d2836';
+      m.fillRect(x, y, w, h);
+    }
+  }
+  const map = new THREE.CanvasTexture(mc); map.colorSpace = THREE.SRGBColorSpace;
+  const emissive = new THREE.CanvasTexture(ec); emissive.colorSpace = THREE.SRGBColorSpace;
+  return { map, emissive };
+}
+
 export class WorldView {
   constructor(scene, planetView, world) {
     this.scene = scene;
@@ -86,6 +141,8 @@ export class WorldView {
     this.time = 0;
     this.followPerson = null;
     this.citizenCity = null;
+    this.boats = [];
+    this.beaconMat = null;
 
     this.buildCities();
     this.buildTerritory();
@@ -109,7 +166,7 @@ export class WorldView {
     return (out || new THREE.Vector3()).set(dir.x, dir.y, dir.z).multiplyScalar(PLANET_R + h);
   }
 
-  // -- cities (instanced buildings by era) --------------------------------------
+  // -- cities (detailed instanced buildings by era) ---------------------------------
   buildCities() {
     this.cityGroup = new THREE.Group();
     this.spin.add(this.cityGroup);
@@ -122,17 +179,80 @@ export class WorldView {
       this.cityGroup.add(m);
       return m;
     };
-    this.imHut = mk(new THREE.ConeGeometry(0.42, 0.8, 6), std(), 3500);
-    this.imHouse = mk(new THREE.BoxGeometry(0.7, 0.55, 0.7), std(), 9000);
-    this.imBlock = mk(new THREE.BoxGeometry(1.1, 1.0, 1.1), std(), 7000);
-    this.imTower = mk(new THREE.BoxGeometry(0.9, 2.8, 0.9), std({ emissive: 0xffca7a, emissiveIntensity: 0.55 }), 5000);
-    this.imDome = mk(new THREE.SphereGeometry(0.9, 12, 8, 0, TAU, 0, Math.PI / 2), std({ color: 0xdfe8f2, roughness: 0.35, metalness: 0.35 }), 500);
-    this.imPad = mk(new THREE.CylinderGeometry(1.6, 1.8, 0.3, 12), std({ color: 0x9aa2ab, roughness: 0.6 }), 48);
-    this.imWall = mk(new THREE.BoxGeometry(1.6, 0.7, 0.35), std({ color: 0x8d8578 }), 2500);
+    // hut: round mud-brick base + thatch cone roof
+    const hutGeo = mergeGeometries([
+      part(new THREE.CylinderGeometry(0.38 * S, 0.45 * S, 0.5 * S, 8), 0, 0.25 * S, 0),
+      part(new THREE.ConeGeometry(0.62 * S, 0.75 * S, 8), 0, 0.85 * S, 0),
+    ]);
+    // house: plaster body + pyramid tile roof
+    const houseGeo = mergeGeometries([
+      part(new THREE.BoxGeometry(0.72 * S, 0.5 * S, 0.72 * S), 0, 0.25 * S, 0),
+      part(new THREE.ConeGeometry(0.60 * S, 0.45 * S, 4), 0, 0.72 * S, 0, Math.PI / 4),
+    ]);
+    // city block + cornice, window facade
+    const blockGeo = mergeGeometries([
+      part(new THREE.BoxGeometry(1.1 * S, 1.0 * S, 1.1 * S), 0, 0.5 * S, 0),
+      part(new THREE.BoxGeometry(1.22 * S, 0.12 * S, 1.22 * S), 0, 1.02 * S, 0),
+    ]);
+    // tower shaft + crown + antenna (antenna uses a plain dark material group)
+    const towerWin = mergeGeometries([
+      part(new THREE.BoxGeometry(0.85 * S, 2.6 * S, 0.85 * S), 0, 1.3 * S, 0),
+      part(new THREE.BoxGeometry(1.0 * S, 0.18 * S, 1.0 * S), 0, 2.66 * S, 0),
+    ]);
+    const towerAnt = part(new THREE.CylinderGeometry(0.035 * S, 0.05 * S, 0.9 * S, 6), 0, 3.15 * S, 0);
+    const towerGeo = mergeGeometries([towerWin, towerAnt], true);
+    // dome habitat + door + skylight cap
+    const domeGeo = mergeGeometries([
+      part(new THREE.SphereGeometry(0.9 * S, 14, 10, 0, TAU, 0, Math.PI / 2), 0, 0, 0),
+      part(new THREE.BoxGeometry(0.4 * S, 0.5 * S, 0.25 * S), 0, 0.25 * S, 0.82 * S),
+      part(new THREE.SphereGeometry(0.22 * S, 10, 8), 0, 0.92 * S, 0),
+    ]);
+    // launch complex: pad + gantry + fuel sphere
+    const padGeo = mergeGeometries([
+      part(new THREE.CylinderGeometry(1.6 * S, 1.8 * S, 0.3 * S, 14), 0, 0.15 * S, 0),
+      part(new THREE.BoxGeometry(0.28 * S, 2.6 * S, 0.28 * S), 1.25 * S, 1.45 * S, 0),
+      part(new THREE.BoxGeometry(0.9 * S, 0.16 * S, 0.16 * S), 0.9 * S, 2.5 * S, 0),
+      part(new THREE.SphereGeometry(0.55 * S, 12, 10), -1.15 * S, 0.7 * S, 0.7 * S),
+    ]);
+    // defensive wall segment + merlons
+    const wallGeo = mergeGeometries([
+      part(new THREE.BoxGeometry(1.6 * S, 0.7 * S, 0.35 * S), 0, 0.35 * S, 0),
+      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), -0.55 * S, 0.8 * S, 0),
+      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0, 0.8 * S, 0),
+      part(new THREE.BoxGeometry(0.28 * S, 0.24 * S, 0.35 * S), 0.55 * S, 0.8 * S, 0),
+    ]);
+    // trees: trunk + two-tier canopy (two meshes sharing matrices)
+    const trunkGeo = part(new THREE.CylinderGeometry(0.09 * S, 0.14 * S, 0.7 * S, 6), 0, 0.35 * S, 0);
+    const canopyGeo = mergeGeometries([
+      part(new THREE.ConeGeometry(0.6 * S, 1.1 * S, 7), 0, 1.1 * S, 0),
+      part(new THREE.ConeGeometry(0.42 * S, 0.8 * S, 7), 0, 1.75 * S, 0),
+    ]);
+    // boat: hull + bow + cabin + mast
+    const boatGeo = mergeGeometries([
+      part(new THREE.BoxGeometry(0.55 * S, 0.4 * S, 1.5 * S), 0, 0.2 * S, 0),
+      part(new THREE.ConeGeometry(0.32 * S, 0.55 * S, 4), 0, 0.2 * S, 0.95 * S, 0, Math.PI / 2),
+      part(new THREE.BoxGeometry(0.4 * S, 0.35 * S, 0.4 * S), 0, 0.55 * S, -0.25 * S),
+      part(new THREE.CylinderGeometry(0.035 * S, 0.035 * S, 1.2 * S, 5), 0, 1.1 * S, 0.15 * S),
+    ]);
+
+    this.imHut = mk(hutGeo, std(), 3500);
+    this.imHouse = mk(houseGeo, std({ roughness: 0.8 }), 9000);
+    const { map: winMap, emissive: winEm } = facadeTextures();
+    this.imBlock = mk(blockGeo, std({ map: winMap, emissiveMap: winEm, emissive: 0xffc37a, emissiveIntensity: 0.9 }), 7000);
+    this.imTower = mk(towerGeo, [
+      std({ map: winMap, emissiveMap: winEm, emissive: 0xffc37a, emissiveIntensity: 1.0 }),
+      std({ color: 0x2a2f36, roughness: 0.5, metalness: 0.6 }),
+    ], 5000);
+    this.imDome = mk(domeGeo, std({ color: 0xdfe8f2, roughness: 0.35, metalness: 0.35 }), 500);
+    this.imPad = mk(padGeo, std({ color: 0x9aa2ab, roughness: 0.6 }), 48);
+    this.imWall = mk(wallGeo, std({ color: 0x8d8578 }), 2500);
+    this.imTrunk = mk(trunkGeo, std({ color: 0x5a4030, roughness: 1 }), 6000);
+    this.imCanopy = mk(canopyGeo, std({ roughness: 0.95 }), 6000);
+    this.imBoat = mk(boatGeo, std({ roughness: 0.7 }), 160);
   }
 
   styleForEra(era) {
-    // returns mix weights [hut, house, block, tower, wall]
+    // mix weights [hut, house, block, tower, wall]
     if (era === 0) return [1, 0, 0, 0, 0];
     if (era === 1) return [0.5, 0.5, 0, 0, 0];
     if (era === 2) return [0.2, 0.7, 0.1, 0, 0.15];
@@ -153,7 +273,6 @@ export class WorldView {
     const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), p = new THREE.Vector3();
     const lightPts = [];
     const civOf = (id) => this.world.civs[id];
-    // biggest cities first so caps favor them
     const cities = [...this.world.cities].sort((a, b) => b.pop - a.pop);
 
     const put = (meshIdx, x, y, z, dir, yaw, sx, sy, sz, color) => {
@@ -166,6 +285,7 @@ export class WorldView {
       return true;
     };
     const tmpC = new THREE.Color();
+    this.boats = [];
 
     for (const city of cities) {
       const civ = civOf(city.civ);
@@ -177,21 +297,19 @@ export class WorldView {
       const d = city.dir;
       tangentBasis(d, t1, t2);
       const crng = new RNG(city.seed);
-      // building count scales with log pop
       let n = Math.floor(clamp(3 + Math.log10(Math.max(10, city.pop)) * 4.2 - era * 0.4, 3, 90));
       if (dmg > 0.4) n = Math.floor(n * (1 - dmg * 0.5));
-      const spread = 1.1 + Math.sqrt(n) * 0.42 + era * 0.12;
+      const spread = (1.1 + Math.sqrt(n) * 0.42 + era * 0.12) * S;
       const mix = this.styleForEra(era);
       const basePos = this.localPos(d, h0, new THREE.Vector3());
       for (let i = 0; i < n; i++) {
         const a = i * 2.39996 + crng.next() * 0.8;
-        const rr = spread * Math.sqrt((i + 0.5) / n) + crng.range(0, 0.3);
+        const rr = spread * Math.sqrt((i + 0.5) / n) + crng.range(0, 0.3 * S);
         const px = basePos.x + (t1.x * Math.cos(a) + t2.x * Math.sin(a)) * rr;
         const py = basePos.y + (t1.y * Math.cos(a) + t2.y * Math.sin(a)) * rr;
         const pz = basePos.z + (t1.z * Math.cos(a) + t2.z * Math.sin(a)) * rr;
-        // re-seat on sphere
         _v1.set(px, py, pz).normalize();
-        const hh = h0 + 0.05;
+        const hh = h0 + 0.05 * S;
         const bx = _v1.x * (PLANET_R + hh), by = _v1.y * (PLANET_R + hh), bz = _v1.z * (PLANET_R + hh);
         const roll = crng.next();
         const yaw = crng.range(0, TAU);
@@ -202,18 +320,17 @@ export class WorldView {
           done = put(0, bx, by, bz, _v1, yaw, sc, sc, sc, tmpC);
         } else if (roll < mix[0] + mix[1]) {
           tmpC.setHSL(era >= 6 ? 0.6 : 0.09, era >= 6 ? 0.08 : 0.3, 0.35 + crng.next() * 0.25);
-          done = put(1, bx, by, bz, _v1, yaw, sc, sc * (0.8 + crng.next() * 0.5), sc, tmpC);
+          done = put(1, bx, by, bz, _v1, yaw, sc, sc * (0.85 + crng.next() * 0.4), sc, tmpC);
         } else if (roll < mix[0] + mix[1] + mix[2]) {
-          tmpC.setHSL(0.08 + crng.next() * 0.04, 0.15, 0.4 + crng.next() * 0.25);
+          tmpC.setHSL(0.08 + crng.next() * 0.04, 0.12, 0.55 + crng.next() * 0.3);
           done = put(2, bx, by, bz, _v1, yaw, sc, sc * (0.9 + crng.next() * 0.8), sc, tmpC);
         } else {
-          tmpC.setHSL(0.58, 0.25, 0.5 + crng.next() * 0.25);
-          done = put(3, bx, by, bz, _v1, yaw, sc, sc * (0.8 + crng.next() * 1.1), sc, null);
+          tmpC.setHSL(0.58, 0.18, 0.6 + crng.next() * 0.3);
+          done = put(3, bx, by, bz, _v1, yaw, sc, sc * (0.8 + crng.next() * 1.1), sc, tmpC);
         }
         if (done && era >= 3 && crng.chance(0.5)) {
           lightPts.push(bx, by, bz);
         }
-        // medieval walls ring
         if (mix[4] > 0 && i < 10 && crng.chance(mix[4] * 0.5)) {
           const wa = (i / 10) * TAU;
           const wr = spread * 1.15;
@@ -221,31 +338,43 @@ export class WorldView {
           const wy = basePos.y + (t1.y * Math.cos(wa) + t2.y * Math.sin(wa)) * wr;
           const wz = basePos.z + (t1.z * Math.cos(wa) + t2.z * Math.sin(wa)) * wr;
           _v2.set(wx, wy, wz).normalize();
-          put(6, _v2.x * (PLANET_R + h0 + 0.1), _v2.y * (PLANET_R + h0 + 0.1), _v2.z * (PLANET_R + h0 + 0.1), _v2, wa, 1, 1, 1, null);
+          put(6, _v2.x * (PLANET_R + h0 + 0.1 * S), _v2.y * (PLANET_R + h0 + 0.1 * S), _v2.z * (PLANET_R + h0 + 0.1 * S), _v2, wa, 1, 1, 1, null);
         }
       }
-      // space-age domes
       if (era >= 8) {
         const nd = Math.min(4, 1 + Math.floor(city.pop / 500000));
         for (let i = 0; i < nd; i++) {
-          const a = crng.range(0, TAU), rr = spread * 1.3 + i * 1.2;
+          const a = crng.range(0, TAU), rr = spread * 1.3 + i * 1.2 * S;
           _v1.set(
             basePos.x + (t1.x * Math.cos(a) + t2.x * Math.sin(a)) * rr,
             basePos.y + (t1.y * Math.cos(a) + t2.y * Math.sin(a)) * rr,
             basePos.z + (t1.z * Math.cos(a) + t2.z * Math.sin(a)) * rr
           ).normalize();
-          put(4, _v1.x * (PLANET_R + h0 + 0.05), _v1.y * (PLANET_R + h0 + 0.05), _v1.z * (PLANET_R + h0 + 0.05), _v1, 0, 1.4, 1.1, 1.4, null);
+          put(4, _v1.x * (PLANET_R + h0 + 0.05 * S), _v1.y * (PLANET_R + h0 + 0.05 * S), _v1.z * (PLANET_R + h0 + 0.05 * S), _v1, 0, 1.4, 1.1, 1.4, null);
         }
       }
-      // launch pad
       if (city.launchpad) {
         const a = 1.1;
         _v1.set(
-          basePos.x + (t1.x * Math.cos(a) + t2.x * Math.sin(a)) * (spread * 1.6 + 2),
-          basePos.y + (t1.y * Math.cos(a) + t2.y * Math.sin(a)) * (spread * 1.6 + 2),
-          basePos.z + (t1.z * Math.cos(a) + t2.z * Math.sin(a)) * (spread * 1.6 + 2)
+          basePos.x + (t1.x * Math.cos(a) + t2.x * Math.sin(a)) * (spread * 1.6 + 2 * S),
+          basePos.y + (t1.y * Math.cos(a) + t2.y * Math.sin(a)) * (spread * 1.6 + 2 * S),
+          basePos.z + (t1.z * Math.cos(a) + t2.z * Math.sin(a)) * (spread * 1.6 + 2 * S)
         ).normalize();
-        put(5, _v1.x * (PLANET_R + h0 + 0.1), _v1.y * (PLANET_R + h0 + 0.1), _v1.z * (PLANET_R + h0 + 0.1), _v1, 0, 1, 1, 1, null);
+        put(5, _v1.x * (PLANET_R + h0 + 0.1 * S), _v1.y * (PLANET_R + h0 + 0.1 * S), _v1.z * (PLANET_R + h0 + 0.1 * S), _v1, 0, 1, 1, 1, null);
+      }
+      // fishing boats for port cities
+      if (city.port && this.boats.length < 150) {
+        const water = cell.neighbor.map((i) => this.world.cells[i]).find((c) => c.ocean);
+        if (water) {
+          const w = water.dir;
+          const dot = d.x * w.x + d.y * w.y + d.z * w.z;
+          let tx = w.x - d.x * dot, ty = w.y - d.y * dot, tz = w.z - d.z * dot;
+          const tl = Math.hypot(tx, ty, tz) || 1;
+          tx /= tl; ty /= tl; tz /= tl;
+          for (let i = 0; i < 2 && this.boats.length < 150; i++) {
+            this.boats.push({ city: city.id, tx, ty, tz, dist: spread + (2 + i * 2.4) * S, ph: crng.range(0, TAU), sc: 0.9 + crng.next() * 0.5, h0 });
+          }
+        }
       }
       city._spread = spread;
     }
@@ -254,10 +383,74 @@ export class WorldView {
       ims[i].instanceMatrix.needsUpdate = true;
       if (ims[i].instanceColor) ims[i].instanceColor.needsUpdate = true;
     }
-    // night lights
+    this.rebuildForests();
     this.rebuildLights(lightPts);
     this.rebuildRings(cities);
     this.syncSmogDamage(cities);
+  }
+
+  // -- forests ------------------------------------------------------------------------
+  rebuildForests() {
+    const trng = new RNG(4242); // deterministic so groves don't jump between rebuilds
+    let tn = 0;
+    const cap = 6000;
+    const c = new THREE.Color();
+    const t1 = new THREE.Vector3(), t2 = new THREE.Vector3();
+    for (const cell of this.world.cells) {
+      if (tn >= cap) break;
+      if (cell.ocean || cell.city != null || cell.forest < 0.3) continue;
+      const density = cell.forest * (cell.biome === B.JUNGLE ? 3 : cell.biome === B.FOREST ? 2.2 : 1);
+      if (trng.next() > density * 0.8) continue;
+      const d = cell.dir;
+      tangentBasis(d, t1, t2);
+      const h = this.surfH(cell.elev);
+      const nTree = 1 + Math.floor(trng.next() * density * 2);
+      for (let i = 0; i < nTree && tn < cap; i++) {
+        const ox = trng.range(-4, 4) * S, oz = trng.range(-4, 4) * S;
+        _v1.set(d.x, d.y, d.z).multiplyScalar(PLANET_R + h).addScaledVector(t1, ox).addScaledVector(t2, oz).normalize();
+        const sc = 0.8 + trng.next() * 0.7;
+        orientUp(_v1, trng.range(0, TAU), _q);
+        _m.compose(_v2.copy(_v1).multiplyScalar(PLANET_R + h), _q, _s.set(sc, sc * (0.9 + trng.next() * 0.3), sc));
+        this.imTrunk.setMatrixAt(tn, _m);
+        this.imCanopy.setMatrixAt(tn, _m);
+        this.imTrunk.setColorAt(tn, c.setHSL(0.07, 0.4, 0.2 + trng.next() * 0.1));
+        const jungle = cell.biome === B.JUNGLE;
+        this.imCanopy.setColorAt(tn, c.setHSL(jungle ? 0.33 : 0.29 + trng.next() * 0.06, jungle ? 0.6 : 0.5, jungle ? 0.22 : 0.28 + trng.next() * 0.12));
+        tn++;
+      }
+    }
+    this.imTrunk.count = tn;
+    this.imCanopy.count = tn;
+    this.imTrunk.instanceMatrix.needsUpdate = true;
+    this.imCanopy.instanceMatrix.needsUpdate = true;
+    if (this.imTrunk.instanceColor) this.imTrunk.instanceColor.needsUpdate = true;
+    if (this.imCanopy.instanceColor) this.imCanopy.instanceColor.needsUpdate = true;
+  }
+
+  updateBoats(camDist) {
+    if (camDist > 900 * S || this.boats.length === 0) { this.imBoat.count = 0; return; }
+    const c = new THREE.Color();
+    let n = 0;
+    for (const b of this.boats) {
+      const city = this.world.cityById(b.city);
+      if (!city || n >= 160) continue;
+      const d = city.dir;
+      const bob = Math.sin(this.time * 1.6 + b.ph) * 0.18 * S;
+      _v1.set(d.x, d.y, d.z).multiplyScalar(PLANET_R + b.h0)
+        .add(_v2.set(b.tx * b.dist, b.ty * b.dist, b.tz * b.dist));
+      // float slightly above sea level
+      const h = Math.max(b.h0, 0.25 * S) + bob + 0.2 * S;
+      _v1.normalize();
+      const yaw = Math.atan2(b.tx, b.tz) + Math.sin(this.time * 0.8 + b.ph) * 0.25;
+      orientUp(_v1, yaw, _q);
+      _m.compose(_v2.copy(_v1).multiplyScalar(PLANET_R + h), _q, _s.set(b.sc, b.sc, b.sc));
+      this.imBoat.setMatrixAt(n, _m);
+      this.imBoat.setColorAt(n, c.setHSL(0.08 + (n % 5) * 0.04, 0.45, 0.42));
+      n++;
+    }
+    this.imBoat.count = n;
+    this.imBoat.instanceMatrix.needsUpdate = true;
+    if (this.imBoat.instanceColor) this.imBoat.instanceColor.needsUpdate = true;
   }
 
   // -- night lights ---------------------------------------------------------------
@@ -266,6 +459,7 @@ export class WorldView {
       uSunDir: { value: new THREE.Vector3(1, 0, 0) },
       uCenter: { value: new THREE.Vector3() },
       uTime: { value: 0 },
+      uPix: { value: 130 * S },
     };
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
@@ -273,7 +467,7 @@ export class WorldView {
       uniforms: this.lightUniforms,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       vertexShader: `
-        uniform vec3 uSunDir; uniform vec3 uCenter; uniform float uTime;
+        uniform vec3 uSunDir; uniform vec3 uCenter; uniform float uTime; uniform float uPix;
         varying float vA;
         void main(){
           vec4 wp = modelMatrix * vec4(position,1.0);
@@ -282,7 +476,7 @@ export class WorldView {
           float tw = 0.75 + 0.25*sin(uTime*3.0 + position.x*12.0 + position.y*17.0);
           vA = night * tw;
           vec4 mv = viewMatrix * wp;
-          gl_PointSize = clamp(130.0 / -mv.z, 1.0, 7.0);
+          gl_PointSize = clamp(uPix / -mv.z, 1.0, 7.0);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
@@ -310,7 +504,7 @@ export class WorldView {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(3), 3));
-    const mat = new THREE.PointsMaterial({ size: 1.5, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, sizeAttenuation: true });
+    const mat = new THREE.PointsMaterial({ size: 1.5 * S, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, sizeAttenuation: true });
     this.terrPts = new THREE.Points(geo, mat);
     this.terrPts.frustumCulled = false;
     this.terrPts.renderOrder = 5;
@@ -324,7 +518,7 @@ export class WorldView {
       if (cell.owner === -1 || cell.ocean) continue;
       const civ = this.world.civs[cell.owner];
       if (!civ || !civ.alive) continue;
-      const h = this.surfH(cell.elev) + 0.7;
+      const h = this.surfH(cell.elev) + 0.7 * S;
       pos.push(cell.dir.x * (PLANET_R + h), cell.dir.y * (PLANET_R + h), cell.dir.z * (PLANET_R + h));
       c.setHex(civ.color);
       col.push(c.r, c.g, c.b);
@@ -335,7 +529,7 @@ export class WorldView {
 
   // -- city rings ---------------------------------------------------------------------
   buildRings() {
-    const geo = new THREE.RingGeometry(1.1, 1.45, 40);
+    const geo = new THREE.RingGeometry(1.1 * S, 1.45 * S, 40);
     const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
     this.rings = new THREE.InstancedMesh(geo, mat, 220);
     this.rings.frustumCulled = false;
@@ -352,8 +546,8 @@ export class WorldView {
       const civ = this.world.civs[city.civ];
       if (!civ) continue;
       const cell = this.world.cells[city.cell];
-      const h = this.surfH(cell.elev) + 0.35;
-      const spread = city._spread || 2;
+      const h = this.surfH(cell.elev) + 0.35 * S;
+      const spread = city._spread || 2 * S;
       _q.setFromUnitVectors(Z_AXIS, _v1.set(city.dir.x, city.dir.y, city.dir.z));
       _m.compose(
         _v2.set(city.dir.x, city.dir.y, city.dir.z).multiplyScalar(PLANET_R + h),
@@ -378,7 +572,6 @@ export class WorldView {
   }
 
   syncSmogDamage(cities) {
-    // smog over industrial cities, smoke over damaged cities
     for (const s of [...this.smogSprites, ...this.dmgSprites]) { this.spin.remove(s); s.material.dispose(); }
     this.smogSprites = []; this.dmgSprites = [];
     let smogN = 0, dmgN = 0;
@@ -390,8 +583,8 @@ export class WorldView {
       if (city.smog > 0.35 && smogN < 40) {
         const m = new THREE.SpriteMaterial({ map: this.smokeTex, transparent: true, opacity: 0.5 * city.smog, depthWrite: false });
         const sp = new THREE.Sprite(m);
-        sp.position.copy(this.localPos(city.dir, h + 3.2));
-        const sc = (city._spread || 2) * 2.2;
+        sp.position.copy(this.localPos(city.dir, h + 3.2 * S));
+        const sc = (city._spread || 2 * S) * 2.2;
         sp.scale.set(sc, sc * 0.7, 1);
         this.spin.add(sp);
         this.smogSprites.push(sp);
@@ -400,8 +593,8 @@ export class WorldView {
       if (city.damage > 0.25 && dmgN < 24) {
         const m = new THREE.SpriteMaterial({ map: this.smokeTex, color: 0x554444, transparent: true, opacity: 0.7, depthWrite: false });
         const sp = new THREE.Sprite(m);
-        sp.position.copy(this.localPos(city.dir, h + 2.2));
-        sp.scale.set(4, 6, 1);
+        sp.position.copy(this.localPos(city.dir, h + 2.2 * S));
+        sp.scale.set(4 * S, 6 * S, 1);
         this.spin.add(sp);
         this.dmgSprites.push(sp);
         dmgN++;
@@ -424,8 +617,8 @@ export class WorldView {
     }
     for (let i = 0; i < want.length; i++) {
       const st = want[i], sp = this.stormSprites[i];
-      sp.position.copy(this.localPos(st.dir, 3.4));
-      const sc = 9 + st.intensity * 9;
+      sp.position.copy(this.localPos(st.dir, 3.4 * S));
+      const sc = (9 + st.intensity * 9) * S;
       sp.scale.set(sc, sc, 1);
       const tint = st.type === 'hurricane' ? 0xdfe9ff : st.type === 'thunderstorm' ? 0xb9aee8 : st.type === 'snowstorm' ? 0xffffff : 0xaac4d8;
       sp.material.color.setHex(tint);
@@ -436,19 +629,31 @@ export class WorldView {
 
   // -- wildlife -------------------------------------------------------------------------
   buildAnimals() {
-    const g = new THREE.BoxGeometry(0.55, 0.35, 0.8);
+    // critter: rounded body + head + ears
+    const critterGeo = mergeGeometries([
+      part(new THREE.SphereGeometry(0.32 * S, 10, 8), 0, 0.35 * S, 0),
+      part(new THREE.SphereGeometry(0.16 * S, 8, 6), 0, 0.58 * S, 0.42 * S),
+      part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), 0.09 * S, 0.72 * S, 0.40 * S),
+      part(new THREE.ConeGeometry(0.05 * S, 0.16 * S, 5), -0.09 * S, 0.72 * S, 0.40 * S),
+    ]);
+    critterGeo.scale(1, 0.85, 1.35);
     const m = new THREE.MeshLambertMaterial({});
-    this.imFauna = new THREE.InstancedMesh(g, m, 700);
+    this.imFauna = new THREE.InstancedMesh(critterGeo, m, 700);
     this.imFauna.frustumCulled = false;
     this.imFauna.count = 0;
     this.spin.add(this.imFauna);
-    const bg = new THREE.ConeGeometry(0.22, 0.7, 4);
+    // bird: dart body + swept wings + tail
+    const birdGeo = mergeGeometries([
+      part(new THREE.ConeGeometry(0.14 * S, 0.6 * S, 6), 0, 0, 0.1 * S, 0, Math.PI / 2),
+      part(new THREE.BoxGeometry(0.85 * S, 0.045 * S, 0.26 * S), 0, 0.05 * S, -0.05 * S),
+      part(new THREE.BoxGeometry(0.24 * S, 0.04 * S, 0.28 * S), 0, 0.02 * S, -0.42 * S),
+    ]);
     const bm = new THREE.MeshBasicMaterial({ color: 0xf2f4f6 });
-    this.imBirds = new THREE.InstancedMesh(bg, bm, 220);
+    this.imBirds = new THREE.InstancedMesh(birdGeo, bm, 220);
     this.imBirds.frustumCulled = false;
     this.imBirds.count = 0;
     this.spin.add(this.imBirds);
-    this.fauna = []; // {herd, ox, oz, ph}
+    this.fauna = [];
   }
 
   syncFauna() {
@@ -458,11 +663,11 @@ export class WorldView {
       if (h.marine || h.n < 30) continue;
       const n = h.kind === 'bird' ? 0 : Math.min(4, 1 + Math.floor(h.n / 300));
       for (let i = 0; i < n && this.fauna.length < 650; i++) {
-        this.fauna.push({ h, ox: r.range(-3, 3), oz: r.range(-3, 3), ph: r.range(0, TAU), bird: false });
+        this.fauna.push({ h, ox: r.range(-3, 3) * S, oz: r.range(-3, 3) * S, ph: r.range(0, TAU), bird: false });
       }
       if (h.kind === 'bird') {
         for (let i = 0; i < 3 && this.fauna.length < 650; i++) {
-          this.fauna.push({ h, ox: r.range(-6, 6), oz: r.range(-6, 6), ph: r.range(0, TAU), bird: true, alt: r.range(2, 7) });
+          this.fauna.push({ h, ox: r.range(-6, 6) * S, oz: r.range(-6, 6) * S, ph: r.range(0, TAU), bird: true, alt: r.range(2, 7) * S });
         }
       }
     }
@@ -478,8 +683,8 @@ export class WorldView {
       const d = cell.dir;
       tangentBasis(d, t1, t2);
       f.ph += dt * 0.7;
-      const wx = f.ox + Math.sin(f.ph) * 1.2, wz = f.oz + Math.cos(f.ph * 0.8) * 1.2;
-      const h = this.surfH(cell.elev) + (f.bird ? f.alt + Math.sin(f.ph * 2) * 0.5 : 0.3);
+      const wx = f.ox + Math.sin(f.ph) * 1.2 * S, wz = f.oz + Math.cos(f.ph * 0.8) * 1.2 * S;
+      const h = this.surfH(cell.elev) + (f.bird ? f.alt + Math.sin(f.ph * 2) * 0.5 * S : 0.3 * S);
       _v3.set(d.x, d.y, d.z).multiplyScalar(PLANET_R + h)
         .addScaledVector(t1, wx).addScaledVector(t2, wz).normalize();
       if (!f.bird && n < 700) {
@@ -493,8 +698,8 @@ export class WorldView {
         this.imFauna.setColorAt(n, c.setRGB(...col));
         n++;
       } else if (f.bird && nb < 220) {
-        // birds fly tangent to the surface
-        _q.setFromUnitVectors(Y_AXIS, _v1);
+        // birds fly nose-first along the flight tangent
+        _q.setFromUnitVectors(Z_AXIS, t1);
         _m.compose(_v3.clone().multiplyScalar(PLANET_R + h), _q, _s.set(1, 1, 1));
         this.imBirds.setMatrixAt(nb, _m);
         nb++;
@@ -509,16 +714,18 @@ export class WorldView {
 
   // -- citizens (close-up life) -------------------------------------------------------------
   buildCitizens() {
-    const g = new THREE.CapsuleGeometry(0.09, 0.22, 3, 6);
+    const g = mergeGeometries([
+      part(new THREE.CapsuleGeometry(0.09 * S, 0.22 * S, 3, 8), 0, 0.32 * S, 0),
+      part(new THREE.SphereGeometry(0.105 * S, 8, 6), 0, 0.62 * S, 0),
+    ]);
     const m = new THREE.MeshLambertMaterial({});
     this.imCit = new THREE.InstancedMesh(g, m, 40);
     this.imCit.frustumCulled = false;
     this.imCit.count = 0;
     this.spin.add(this.imCit);
     this.citizens = [];
-    // followed person marker
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.35, 0.5, 24),
+      new THREE.RingGeometry(0.35 * S, 0.5 * S, 24),
       new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false })
     );
     this.personRing = ring;
@@ -532,7 +739,7 @@ export class WorldView {
     if (!city) { this.imCit.count = 0; return; }
     const r = new RNG(city.seed + 77);
     for (let i = 0; i < 36; i++) {
-      this.citizens.push({ a: r.range(0, TAU), rr: r.range(0.5, (city._spread || 2) * 1.4), sp: r.range(0.1, 0.5) * (r.chance(0.5) ? 1 : -1), hue: r.next() });
+      this.citizens.push({ a: r.range(0, TAU), rr: r.range(0.5, (city._spread || 2 * S) * 1.4), sp: r.range(0.1, 0.5) * (r.chance(0.5) ? 1 : -1), hue: r.next() });
     }
   }
 
@@ -554,7 +761,7 @@ export class WorldView {
       const pz = base.z + (t1.z * Math.cos(w.a) + t2.z * Math.sin(w.a)) * w.rr;
       _v1.set(px, py, pz).normalize();
       _q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _v1);
-      _m.compose(_v1.clone().multiplyScalar(PLANET_R + this.surfH(cell.elev) + 0.25), _q, _s.set(1, 1, 1));
+      _m.compose(_v1.clone().multiplyScalar(PLANET_R + this.surfH(cell.elev) + 0.25 * S), _q, _s.set(1, 1, 1));
       this.imCit.setMatrixAt(n, _m);
       this.imCit.setColorAt(n, c.setHSL(w.hue, 0.5, 0.45));
       n++;
@@ -562,7 +769,6 @@ export class WorldView {
     this.imCit.count = n;
     this.imCit.instanceMatrix.needsUpdate = true;
     if (this.imCit.instanceColor) this.imCit.instanceColor.needsUpdate = true;
-    // followed person
     if (this.followPerson && this.followPerson.city === city.id) {
       const fp = this.followPerson;
       fp.a += fp.sp * dt;
@@ -571,7 +777,7 @@ export class WorldView {
       const pz = base.z + (t1.z * Math.cos(fp.a) + t2.z * Math.sin(fp.a)) * fp.rr;
       _v1.set(px, py, pz).normalize();
       this.personRing.visible = true;
-      this.personRing.position.copy(_v1).multiplyScalar(PLANET_R + this.surfH(cell.elev) + 0.3);
+      this.personRing.position.copy(_v1).multiplyScalar(PLANET_R + this.surfH(cell.elev) + 0.3 * S);
       this.personRing.quaternion.setFromUnitVectors(Z_AXIS, _v1);
       const s = 1 + Math.sin(this.time * 4) * 0.15;
       this.personRing.scale.set(s, s, s);
@@ -585,23 +791,40 @@ export class WorldView {
   // -- rockets ----------------------------------------------------------------------------------
   buildRockets() {
     this.rockets = [];
-    const bodyG = new THREE.CylinderGeometry(0.45, 0.5, 2.4, 10);
-    const noseG = new THREE.ConeGeometry(0.45, 1.0, 10);
-    const flameG = new THREE.ConeGeometry(0.4, 1.8, 8);
+    const bodyG = new THREE.CylinderGeometry(0.45 * S, 0.5 * S, 2.4 * S, 12);
+    const noseG = new THREE.ConeGeometry(0.45 * S, 1.0 * S, 12);
+    const flameG = new THREE.ConeGeometry(0.4 * S, 1.8 * S, 8);
+    const finG = new THREE.BoxGeometry(0.12 * S, 0.9 * S, 0.55 * S);
+    const bellG = new THREE.CylinderGeometry(0.3 * S, 0.48 * S, 0.45 * S, 10);
+    const portG = new THREE.SphereGeometry(0.16 * S, 10, 8);
     this.flameTex = glowTexture('rgba(255,200,120,1)', 'rgba(255,120,40,0)');
     for (let i = 0; i < 6; i++) {
       const g = new THREE.Group();
-      const body = new THREE.Mesh(bodyG, new THREE.MeshStandardMaterial({ color: 0xf2f4f6, roughness: 0.4, metalness: 0.3 }));
-      body.position.y = 1.2;
-      const nose = new THREE.Mesh(noseG, new THREE.MeshStandardMaterial({ color: 0xd43a2f, roughness: 0.5 }));
-      nose.position.y = 2.9;
+      const metal = new THREE.MeshStandardMaterial({ color: 0xf2f4f6, roughness: 0.35, metalness: 0.45 });
+      const accent = new THREE.MeshStandardMaterial({ color: 0xd43a2f, roughness: 0.5, metalness: 0.2 });
+      const dark = new THREE.MeshStandardMaterial({ color: 0x30343a, roughness: 0.6, metalness: 0.5 });
+      const body = new THREE.Mesh(bodyG, metal);
+      body.position.y = 1.2 * S;
+      const nose = new THREE.Mesh(noseG, accent);
+      nose.position.y = 2.9 * S;
+      const bell = new THREE.Mesh(bellG, dark);
+      bell.position.y = -0.2 * S;
+      const port = new THREE.Mesh(portG, new THREE.MeshStandardMaterial({ color: 0x0b1520, emissive: 0x7dd3fc, emissiveIntensity: 1.2, roughness: 0.2 }));
+      port.position.set(0, 1.9 * S, 0.4 * S);
+      for (let f = 0; f < 3; f++) {
+        const fin = new THREE.Mesh(finG, accent);
+        const a = (f / 3) * TAU;
+        fin.position.set(Math.cos(a) * 0.55 * S, 0.45 * S, Math.sin(a) * 0.55 * S);
+        fin.rotation.y = -a;
+        g.add(fin);
+      }
       const flame = new THREE.Mesh(flameG, new THREE.MeshBasicMaterial({ color: 0xffa030, transparent: true, opacity: 0.9, fog: false }));
-      flame.position.y = -0.9;
+      flame.position.y = -1.3 * S;
       flame.rotation.x = Math.PI;
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.flameTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
-      glow.scale.set(4, 4, 1);
-      glow.position.y = -0.8;
-      g.add(body, nose, flame, glow);
+      glow.scale.set(4 * S, 4 * S, 1);
+      glow.position.y = -1.2 * S;
+      g.add(body, nose, bell, port, flame, glow);
       g.visible = false;
       this.scene.add(g);
       this.rockets.push({ g, flame, glow, active: false, t: 0, dur: 55, from: new THREE.Vector3(), ctrl: new THREE.Vector3(), mission: '', civ: -1 });
@@ -613,14 +836,13 @@ export class WorldView {
     const city = this.world.cityById(cityId);
     if (!r || !city) return null;
     const cell = this.world.cells[city.cell];
-    const start = this.localPos(city.dir, this.surfH(cell.elev) + 0.5, new THREE.Vector3());
+    const start = this.localPos(city.dir, this.surfH(cell.elev) + 0.5 * S, new THREE.Vector3());
     this.spin.updateWorldMatrix(true, false);
     start.applyMatrix4(this.spin.matrixWorld);
     r.from.copy(start);
-    // control point: high above launch site (world)
     const pp = this.pv.planetWorldPos(new THREE.Vector3());
     const up = start.clone().sub(pp).normalize();
-    r.ctrl.copy(start).addScaledVector(up, 90);
+    r.ctrl.copy(start).addScaledVector(up, 90 * S);
     r.t = 0;
     r.dur = mission === 'test' || mission === 'sat' ? 30 : 55;
     r.active = true;
@@ -634,14 +856,14 @@ export class WorldView {
   updateRockets(dtReal, warp) {
     const dt = dtReal * Math.min(warp, 30);
     const moonW = this.pv.moonWorldPos(new THREE.Vector3());
+    const Y = new THREE.Vector3(0, 1, 0);
     for (const r of this.rockets) {
       if (!r.active) continue;
       r.t += dt / r.dur;
       const t = Math.min(1, r.t);
       const target = (r.mission === 'test' || r.mission === 'sat')
-        ? _v1.copy(r.from).addScaledVector(_v2.copy(r.from).sub(this.pv.planetWorldPos(_v3)).normalize(), 55)
+        ? _v1.copy(r.from).addScaledVector(_v2.copy(r.from).sub(this.pv.planetWorldPos(_v3)).normalize(), 55 * S)
         : _v1.copy(moonW);
-      // quadratic bezier from → ctrl → target
       const a = r.from, b = r.ctrl, c = target;
       const p = r.g.position;
       const u = 1 - t;
@@ -650,13 +872,12 @@ export class WorldView {
         u * u * a.y + 2 * u * t * b.y + t * t * c.y,
         u * u * a.z + 2 * u * t * b.z + t * t * c.z
       );
-      // orient along velocity
       _v2.set(
         2 * u * (b.x - a.x) + 2 * t * (c.x - b.x),
         2 * u * (b.y - a.y) + 2 * t * (c.y - b.y),
         2 * u * (b.z - a.z) + 2 * t * (c.z - b.z)
       ).normalize();
-      r.g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _v2);
+      r.g.quaternion.setFromUnitVectors(Y, _v2);
       const burning = t < 0.55;
       r.flame.visible = burning;
       r.glow.visible = burning;
@@ -668,21 +889,24 @@ export class WorldView {
         r.active = false;
         r.g.visible = false;
         if (r.mission === 'crewed' || r.mission === 'base' || r.mission === 'colony' || r.mission === 'supply' || r.mission === 'probe') {
-          // arrival flash at moon
           this.spawnEffectAtWorld('arrivalFlash', moonW, 6);
         }
       }
     }
   }
 
-  // -- satellites ---------------------------------------------------------------------------------
+  // -- satellites (single merged mesh each: bus + panels + dish) ----------------------------------
   buildSatellites() {
     this.satGroup = new THREE.Group();
     this.pivot.add(this.satGroup);
     this.sats = [];
-    const bodyG = new THREE.BoxGeometry(0.8, 0.8, 0.8);
-    const panG = new THREE.BoxGeometry(2.6, 0.1, 1.0);
-    this.satBodyG = bodyG; this.satPanG = panG;
+    this.satGeo = mergeGeometries([
+      paint(part(new THREE.BoxGeometry(0.8 * S, 0.8 * S, 0.8 * S), 0, 0, 0), 0xcfd6dd),
+      paint(part(new THREE.BoxGeometry(2.6 * S, 0.08 * S, 1.0 * S), 0, 0, 0), 0x2a55c4),
+      paint(part(new THREE.CylinderGeometry(0.06 * S, 0.06 * S, 0.8 * S, 6), 0, 0.7 * S, 0), 0x8a929a),
+      paint(part(new THREE.SphereGeometry(0.34 * S, 10, 6, 0, TAU, 0, 0.7), 0, 1.1 * S, 0, 0, 0.6), 0xe8ecf0),
+    ]);
+    this.satMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.65, roughness: 0.3, emissive: 0x0a1230, emissiveIntensity: 0.5 });
   }
 
   syncSatellites() {
@@ -690,20 +914,12 @@ export class WorldView {
     for (const c of this.world.civs) total += c.space.satellites;
     total = Math.min(40, total);
     if (this.sats.length >= total) return;
-    if (!this.satBodyM) {
-      this.satBodyM = new THREE.MeshStandardMaterial({ color: 0xcfd6dd, metalness: 0.7, roughness: 0.3 });
-      this.satPanM = new THREE.MeshStandardMaterial({ color: 0x2244aa, metalness: 0.4, roughness: 0.4, emissive: 0x112255, emissiveIntensity: 0.6 });
-    }
-    const bodyM = this.satBodyM, panM = this.satPanM;
     while (this.sats.length < total) {
-      const g = new THREE.Group();
-      g.add(new THREE.Mesh(this.satBodyG, bodyM));
-      const pan = new THREE.Mesh(this.satPanG, panM);
-      g.add(pan);
+      const mesh = new THREE.Mesh(this.satGeo, this.satMat);
       const r = this.rng;
-      const sat = { g, ang: r.range(0, TAU), rad: PLANET_R * r.range(1.35, 1.9), incl: r.range(-0.6, 0.6), speed: r.range(0.5, 1) * 0.12 };
+      const sat = { g: mesh, ang: r.range(0, TAU), rad: PLANET_R * r.range(1.35, 1.9), incl: r.range(-0.6, 0.6), speed: r.range(0.5, 1) * 0.12 };
       this.sats.push(sat);
-      this.satGroup.add(g);
+      this.satGroup.add(mesh);
     }
   }
 
@@ -719,14 +935,14 @@ export class WorldView {
   // -- lunar base -----------------------------------------------------------------------------------
   buildMoonBase() {
     this.baseGroup = new THREE.Group();
-    // placed on the planet-facing side of the moon (+Z faces planet via lookAt)
-    this.baseGroup.position.set(0, 4, MOON_R - 1);
+    this.baseGroup.position.set(0, 4 * MS, MOON_R - 1 * MS);
     this.baseGroup.rotation.x = -0.18;
     this.pv.moonMesh.add(this.baseGroup);
     this.baseLevel = -1;
-    const domeG = new THREE.SphereGeometry(1.6, 14, 10, 0, TAU, 0, Math.PI / 2);
+    const domeG = new THREE.SphereGeometry(1.6 * MS, 14, 10, 0, TAU, 0, Math.PI / 2);
     const domeM = new THREE.MeshStandardMaterial({ color: 0xe8eef4, roughness: 0.3, metalness: 0.4, emissive: 0x88aaff, emissiveIntensity: 0.25 });
     this.domeG = domeG; this.domeM = domeM;
+    this.beaconMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff2222, emissiveIntensity: 2 });
   }
 
   syncMoonBase() {
@@ -738,25 +954,54 @@ export class WorldView {
     if (level <= 0) return;
     const r = new RNG(555);
     const n = level >= 3 ? 9 : level >= 2 ? 5 : 2;
+    const spots = [];
     for (let i = 0; i < n; i++) {
       const d = new THREE.Mesh(this.domeG, this.domeM);
-      d.position.set(r.range(-8, 8), 0, r.range(-6, 6));
+      const px = r.range(-8, 8) * MS, pz = r.range(-6, 6) * MS;
+      d.position.set(px, 0, pz);
       d.scale.setScalar(r.range(0.7, 1.3));
       this.baseGroup.add(d);
+      spots.push(d.position);
     }
-    // landing pad + tower
-    const pad = new THREE.Mesh(new THREE.CylinderGeometry(3, 3.4, 0.4, 14), new THREE.MeshStandardMaterial({ color: 0x8a929a }));
-    pad.position.set(9, 0.2, 4);
+    // connector tubes between neighboring domes
+    const tubeM = new THREE.MeshStandardMaterial({ color: 0xb9c2cc, roughness: 0.5, metalness: 0.5 });
+    for (let i = 1; i < spots.length; i++) {
+      const a = spots[i - 1], b = spots[i];
+      const len = a.distanceTo(b);
+      if (len > 9 * MS) continue;
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * MS, 0.35 * MS, len, 8), tubeM);
+      tube.position.copy(a).lerp(b, 0.5);
+      tube.position.y = 0.4 * MS;
+      tube.quaternion.setFromUnitVectors(Y_AXIS, _v1.copy(b).sub(a).normalize());
+      this.baseGroup.add(tube);
+    }
+    // solar panel farm
+    const panM = new THREE.MeshStandardMaterial({ color: 0x1c3f9e, roughness: 0.35, metalness: 0.5, emissive: 0x0a1c50, emissiveIntensity: 0.5 });
+    for (let i = 0; i < 4; i++) {
+      const pan = new THREE.Mesh(new THREE.BoxGeometry(2.4 * MS, 0.12 * MS, 1.5 * MS), panM);
+      pan.position.set((-6 + i * 3.4) * MS, 0.8 * MS, 8.5 * MS);
+      pan.rotation.x = -0.5;
+      this.baseGroup.add(pan);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * MS, 0.08 * MS, 0.9 * MS, 6), tubeM);
+      leg.position.set((-6 + i * 3.4) * MS, 0.4 * MS, 8.5 * MS);
+      this.baseGroup.add(leg);
+    }
+    // landing pad + comms tower with pulsing beacon
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(3 * MS, 3.4 * MS, 0.4 * MS, 14), new THREE.MeshStandardMaterial({ color: 0x8a929a }));
+    pad.position.set(9 * MS, 0.2 * MS, 4 * MS);
     this.baseGroup.add(pad);
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 7, 8), new THREE.MeshStandardMaterial({ color: 0xdde3ea, emissive: 0xff5555, emissiveIntensity: 0.8 }));
-    tower.position.set(-8, 3.5, -4);
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.25 * MS, 0.35 * MS, 7 * MS, 8), new THREE.MeshStandardMaterial({ color: 0xdde3ea }));
+    tower.position.set(-8 * MS, 3.5 * MS, -4 * MS);
     this.baseGroup.add(tower);
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.45 * MS, 10, 8), this.beaconMat);
+    beacon.position.set(-8 * MS, 7.2 * MS, -4 * MS);
+    this.baseGroup.add(beacon);
     // ground lights
     const lg = new THREE.BufferGeometry();
     const pts = [];
-    for (let i = 0; i < 30; i++) pts.push(r.range(-10, 12), 0.3, r.range(-7, 7));
+    for (let i = 0; i < 30; i++) pts.push(r.range(-10, 12) * MS, 0.3 * MS, r.range(-7, 7) * MS);
     lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
-    const lm = new THREE.PointsMaterial({ color: 0x9fd8ff, size: 0.7, transparent: true, opacity: 0.9, fog: false });
+    const lm = new THREE.PointsMaterial({ color: 0x9fd8ff, size: 0.7 * MS, transparent: true, opacity: 0.9, fog: false });
     this.baseGroup.add(new THREE.Points(lg, lm));
   }
 
@@ -768,23 +1013,22 @@ export class WorldView {
       const N = 70;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-      const mat = new THREE.PointsMaterial({ size: 1.6, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending });
+      const mat = new THREE.PointsMaterial({ size: 1.6 * S, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false;
       pts.visible = false;
       this.spin.add(pts);
       this.effects.push({ pts, vel: new Float32Array(N * 3), life: 0, maxLife: 1, active: false, grav: 0, drag: 0, world: false });
     }
-    // world-space flashes (rocket arrivals)
     this.worldFlashes = [];
   }
 
   spawnEffect(type, dirLocal, scale = 1) {
     const e = this.effects.find((x) => !x.active);
-    if (!e) return;
+    if (!e) return null;
     const N = 70;
     const pos = e.pts.geometry.attributes.position.array;
-    const h = 1.2;
+    const h = 1.2 * S;
     const t1 = new THREE.Vector3(), t2 = new THREE.Vector3();
     const up = new THREE.Vector3(dirLocal.x, dirLocal.y, dirLocal.z).normalize();
     tangentBasis(up, t1, t2);
@@ -805,19 +1049,19 @@ export class WorldView {
       shower: { c: 0xcfe4ff, life: 3, spd: 16, up: 0, grav: 0, size: 1.6 },
     }[type] || { c: 0xffffff, life: 2, spd: 6, up: 5, grav: 5, size: 2 };
     e.pts.material.color.setHex(cfg.c);
-    e.pts.material.size = cfg.size * scale;
+    e.pts.material.size = cfg.size * S * scale;
     e.pts.material.blending = (type === 'smoke') ? THREE.NormalBlending : THREE.AdditiveBlending;
     e.life = cfg.life; e.maxLife = cfg.life;
-    e.grav = cfg.grav; e.active = true;
+    e.grav = cfg.grav * S; e.active = true;
     e.pts.visible = true;
     for (let i = 0; i < N; i++) {
-      const jx = (Math.random() - 0.5) * 2 * scale, jz = (Math.random() - 0.5) * 2 * scale;
+      const jx = (Math.random() - 0.5) * 2 * scale * S, jz = (Math.random() - 0.5) * 2 * scale * S;
       _v1.copy(up).multiplyScalar(PLANET_R + h)
         .addScaledVector(t1, jx).addScaledVector(t2, jz);
       pos.set([_v1.x, _v1.y, _v1.z], i * 3);
-      const vx = (Math.random() - 0.5) * cfg.spd * scale;
-      const vy = Math.random() * cfg.up * scale;
-      const vz = (Math.random() - 0.5) * cfg.spd * scale;
+      const vx = (Math.random() - 0.5) * cfg.spd * S * scale;
+      const vy = Math.random() * cfg.up * S * scale;
+      const vz = (Math.random() - 0.5) * cfg.spd * S * scale;
       _v2.copy(up).multiplyScalar(vy).addScaledVector(t1, vx).addScaledVector(t2, vz);
       e.vel.set([_v2.x, _v2.y, _v2.z], i * 3);
     }
@@ -827,19 +1071,17 @@ export class WorldView {
   }
 
   spawnEffectAtWorld(type, worldPos, scale) {
-    // convert world → spin-local
     this.spin.updateWorldMatrix(true, false);
     const inv = new THREE.Matrix4().copy(this.spin.matrixWorld).invert();
     const local = worldPos.clone().applyMatrix4(inv);
     const dir = local.clone().normalize();
-    // move particles to actual local point (far from surface, e.g. at moon)
     const e = this.spawnEffect(type === 'arrivalFlash' ? 'arrivalFlash' : 'explosion', dir, scale);
     if (e) {
       const pos = e.pts.geometry.attributes.position.array;
       for (let i = 0; i < 70; i++) {
-        pos[i * 3] += (local.x - dir.x * (PLANET_R + 1.2));
-        pos[i * 3 + 1] += (local.y - dir.y * (PLANET_R + 1.2));
-        pos[i * 3 + 2] += (local.z - dir.z * (PLANET_R + 1.2));
+        pos[i * 3] += (local.x - dir.x * (PLANET_R + 1.2 * S));
+        pos[i * 3 + 1] += (local.y - dir.y * (PLANET_R + 1.2 * S));
+        pos[i * 3 + 2] += (local.z - dir.z * (PLANET_R + 1.2 * S));
       }
       e.pts.geometry.attributes.position.needsUpdate = true;
     }
@@ -853,7 +1095,6 @@ export class WorldView {
       if (e.life <= 0) { e.active = false; e.pts.visible = false; continue; }
       const pos = e.pts.geometry.attributes.position.array;
       for (let i = 0; i < 70; i++) {
-        // gravity toward planet center (approx radial)
         _v1.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).normalize();
         e.vel[i * 3] -= _v1.x * e.grav * dt;
         e.vel[i * 3 + 1] -= _v1.y * e.grav * dt;
@@ -870,7 +1111,7 @@ export class WorldView {
   // -- selection ring -----------------------------------------------------------------------------------
   buildSelection() {
     this.selRing = new THREE.Mesh(
-      new THREE.RingGeometry(1.6, 1.9, 48),
+      new THREE.RingGeometry(1.6 * S, 1.9 * S, 48),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, fog: false })
     );
     this.selRing.visible = false;
@@ -890,21 +1131,11 @@ export class WorldView {
   // -- helpers --------------------------------------------------------------------------------------------
   cityWorldPos(city, out) {
     const cell = this.world.cells[city.cell];
-    const h = cell ? this.surfH(cell.elev) + 1 : 1;
+    const h = cell ? this.surfH(cell.elev) + 1 * S : 1 * S;
     out = out || new THREE.Vector3();
     out.set(city.dir.x, city.dir.y, city.dir.z).multiplyScalar(PLANET_R + h);
     this.spin.updateWorldMatrix(true, false);
     return out.applyMatrix4(this.spin.matrixWorld);
-  }
-
-  dirWorldToLocalSpin(worldDir, out) {
-    // world direction from planet center → spin-local direction
-    const pp = this.pv.planetWorldPos(new THREE.Vector3());
-    const inv = new THREE.Matrix4().copy(this.spin.matrixWorld).invert();
-    out = out || new THREE.Vector3();
-    out.copy(worldDir).add(pp).applyMatrix4(inv).sub(new THREE.Vector3(0, 0, 0));
-    // simpler: rotate-only inverse
-    return out.normalize();
   }
 
   nearestCity(spinDir) {
@@ -943,7 +1174,6 @@ export class WorldView {
     this.time += dtReal;
     this.drainQueue();
 
-    // throttled rebuilds
     if (this.world.viewsDirty.cities && this.time - this.lastCityBuild > 1.6) {
       this.world.viewsDirty.cities = false;
       this.lastCityBuild = this.time;
@@ -959,20 +1189,18 @@ export class WorldView {
     this.syncMoonBase();
     this.syncSatellites();
 
-    // night light uniforms
     if (sunDir) {
       this.lightUniforms.uSunDir.value.copy(sunDir);
       this.pv.planetWorldPos(this.lightUniforms.uCenter.value);
       this.lightUniforms.uTime.value = this.time;
     }
 
-    // citizen LOD: show wanderers near close-up city
+    // lunar beacon pulse
+    if (this.beaconMat) this.beaconMat.emissiveIntensity = 1.4 + Math.sin(this.time * 5) * 1.2;
+
     const pp = this.pv.planetWorldPos(_v1);
     const camDist = camera.position.distanceTo(pp) - PLANET_R;
-    if (camDist < 26) {
-      // find city near camera focus
-      const focus = _v2.copy(camera.position).sub(pp).normalize();
-      // world → spin local
+    if (camDist < 26 * S) {
       this.spin.updateWorldMatrix(true, false);
       const inv = new THREE.Matrix4().copy(this.spin.matrixWorld).invert();
       const lp = new THREE.Vector3().copy(camera.position).applyMatrix4(inv).normalize();
@@ -985,22 +1213,24 @@ export class WorldView {
       if (this.citizenCity) this.setCitizenCity(null);
       this.imCit.count = 0;
     }
-    if (camDist < 220) { this.updateFauna(dtReal * Math.min(warp, 4)); this.imFauna.visible = true; this.imBirds.visible = true; }
+    if (camDist < 220 * S) { this.updateFauna(dtReal * Math.min(warp, 4)); this.imFauna.visible = true; this.imBirds.visible = true; }
     else { this.imFauna.visible = false; this.imBirds.visible = false; }
+    const treesNear = camDist < 500 * S;
+    this.imTrunk.visible = treesNear;
+    this.imCanopy.visible = treesNear;
+    this.updateBoats(camDist);
 
-    // hide territory dots when very far (declutter) — fade by distance
-    this.terrPts.material.opacity = camDist > 1200 ? 0.0 : camDist > 500 ? 0.3 : 0.55;
+    this.terrPts.material.opacity = camDist > 1200 * S ? 0.0 : camDist > 500 * S ? 0.3 : 0.55;
     this.terrPts.visible = this.terrPts.material.opacity > 0.01;
-    this.rings.material.opacity = camDist > 1500 ? 0.25 : 0.85;
+    this.rings.material.opacity = camDist > 1500 * S ? 0.25 : 0.85;
 
     this.updateRockets(dtReal, warp);
     this.updateSatellites(dtReal, warp);
     this.updateEffects(dtReal, warp);
 
-    // selection pulse
     if (this.selRing.visible && this.selDir) {
       const s = (this.selRing.userData.scale || 2.5) * (1 + Math.sin(this.time * 3) * 0.08);
-      this.selRing.position.copy(this.selDir).multiplyScalar(PLANET_R + 1.0);
+      this.selRing.position.copy(this.selDir).multiplyScalar(PLANET_R + 0.6 * S);
       this.selRing.quaternion.setFromUnitVectors(Z_AXIS, this.selDir);
       this.selRing.scale.set(s, s, s);
     }

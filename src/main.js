@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TAU, clamp } from './noise.js';
-import { World, PlanetData, YEARS_PER_SECOND, PLANET_R } from './world.js';
+import { World, PlanetData, YEARS_PER_SECOND, PLANET_R, WORLD_SCALE } from './world.js';
 import { PlanetView, MOON_DIST, ORBIT_DIST } from './planetView.js';
 import { WorldView } from './worldView.js';
 import { UI } from './ui.js';
@@ -27,7 +27,7 @@ class Game {
     this.prevWarpIndex = 6;
     this.godPower = 'inspect';
     this.selection = { kind: 'none' };
-    this.follow = null;
+    this.follow = { kind: 'planet' }; // camera always tracks the planet by default
     this.followPrev = new THREE.Vector3();
     this.followInit = false;
     this.camTween = null;
@@ -63,8 +63,12 @@ class Game {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
-    this.controls.minDistance = 3.2;
-    this.controls.maxDistance = 14000;
+    // Planet-locked camera: no panning — left-drag AND right-drag orbit,
+    // wheel zooms, and the view always faces the tracked body.
+    this.controls.enablePan = false;
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    this.controls.minDistance = 3.2 * WORLD_SCALE;
+    this.controls.maxDistance = 22000;
     this.controls.zoomSpeed = 1.15;
     this.controls.addEventListener('start', () => { this.camTween = null; });
 
@@ -93,10 +97,11 @@ class Game {
     this.bindInput();
     addEventListener('resize', () => this.onResize());
 
-    // opening shot: full planet
+    // opening shot: full planet, camera locked on
     const pp = this.planetView.planetWorldPos(new THREE.Vector3());
     this.controls.target.copy(pp);
-    this.camera.position.copy(pp).add(new THREE.Vector3(200, 150, 260));
+    this.camera.position.copy(pp).add(new THREE.Vector3(200, 150, 260).multiplyScalar(WORLD_SCALE));
+    this.follow = { kind: 'planet' };
 
     document.querySelector('#loading').classList.add('done');
     setTimeout(() => {
@@ -261,10 +266,10 @@ class Game {
   }
 
   setFollow(f) {
-    this.follow = f;
+    // null = release back to the default planet lock (camera always tracks it)
+    this.follow = f || { kind: 'planet' };
     this.followInit = false;
-    if (!f) this.worldView.followPerson = null;
-    else if (f.kind !== 'person') this.worldView.followPerson = null;
+    if (this.follow.kind !== 'person') this.worldView.followPerson = null;
   }
 
   gotoCity(id) {
@@ -276,7 +281,7 @@ class Game {
     const side = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 1, 0));
     if (side.lengthSq() < 0.01) side.set(1, 0, 0);
     side.normalize();
-    const to = wp.clone().addScaledVector(up, 7).addScaledVector(side, 5);
+    const to = wp.clone().addScaledVector(up, 7 * WORLD_SCALE).addScaledVector(side, 5 * WORLD_SCALE);
     this.flyTo(to, wp, 1.8);
     this.setFollow({ kind: 'city', city: id });
   }
@@ -299,7 +304,9 @@ class Game {
     const wp = local.applyMatrix4(this.worldView.spin.matrixWorld);
     const pp = this.planetView.planetWorldPos(new THREE.Vector3());
     const up = wp.clone().sub(pp).normalize();
-    this.flyTo(wp.clone().addScaledVector(up, 42), wp, 1.8);
+    // swing the camera around to face this spot; target stays on the planet
+    this.setFollow({ kind: 'planet' });
+    this.flyTo(wp.clone().addScaledVector(up, 42 * WORLD_SCALE), pp, 1.8);
   }
 
   focusLatLon(lat, lon) {
@@ -309,8 +316,8 @@ class Game {
     const wp = local.applyMatrix4(this.worldView.spin.matrixWorld);
     const pp = this.planetView.planetWorldPos(new THREE.Vector3());
     const up = wp.clone().sub(pp).normalize();
-    this.setFollow(null);
-    this.flyTo(wp.clone().addScaledVector(up, 60), wp, 1.8);
+    this.setFollow({ kind: 'planet' });
+    this.flyTo(wp.clone().addScaledVector(up, 60 * WORLD_SCALE), pp, 1.8);
   }
 
   gotoPreset(name) {
@@ -322,7 +329,7 @@ class Game {
       if (!city) return;
       const wp = this.worldView.cityWorldPos(city, new THREE.Vector3());
       const up = wp.clone().sub(pp).normalize();
-      const dist = name === 'surface' ? 9 : 60;
+      const dist = (name === 'surface' ? 9 : 60) * WORLD_SCALE;
       const side = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 1, 0));
       if (side.lengthSq() < 0.01) side.set(1, 0, 0);
       side.normalize();
@@ -330,18 +337,18 @@ class Game {
       this.flyTo(wp.clone().addScaledVector(up, dist).addScaledVector(side, dist * 0.6), wp, 2.0);
       this.selectCity(city.id);
     } else if (name === 'planet') {
-      this.setFollow(null);
+      this.setFollow({ kind: 'planet' });
       const dir = this.camera.position.clone().sub(pp).normalize();
-      this.flyTo(pp.clone().addScaledVector(dir, 360), pp, 2.2);
+      this.flyTo(pp.clone().addScaledVector(dir, 360 * WORLD_SCALE), pp, 2.2);
     } else if (name === 'moon') {
       const mp = this.planetView.moonWorldPos(new THREE.Vector3());
       this.setFollow({ kind: 'moon' });
-      this.flyTo(mp.clone().add(new THREE.Vector3(55, 34, 62)), mp, 2.2);
+      this.flyTo(mp.clone().add(new THREE.Vector3(55, 34, 62).multiplyScalar(WORLD_SCALE)), mp, 2.2);
       this.selection = { kind: 'moon' };
       this.ui.switchTab('inspect');
     } else if (name === 'system') {
-      this.setFollow(null);
-      const to = pp.clone().add(new THREE.Vector3(900, 1900, 2400));
+      this.setFollow({ kind: 'planet' });
+      const to = pp.clone().add(new THREE.Vector3(900, 1900, 2400).multiplyScalar(WORLD_SCALE));
       this.flyTo(to, pp, 2.6);
     }
   }
@@ -351,12 +358,14 @@ class Game {
       t: 0, dur,
       fromPos: this.camera.position.clone(), toPos: pos.clone(),
       fromTg: this.controls.target.clone(), toTg: target.clone(),
+      off: pos.clone().sub(target), // camera offset, re-anchored to follow target each frame
     };
   }
 
   followAnchor(out, dt) {
     const f = this.follow;
     if (!f) return null;
+    if (f.kind === 'planet') return this.planetView.planetWorldPos(out);
     if (f.kind === 'city') {
       const c = this.world.cityById(f.city);
       return c ? this.worldView.cityWorldPos(c, out) : null;
@@ -436,7 +445,7 @@ class Game {
       const active = this.worldView.rockets.findIndex((r) => r.active);
       if (active >= 0 && (!this.follow || this.follow.kind !== 'rocket')) {
         this.setFollow({ kind: 'rocket', idx: active });
-        this.ui.toast('🚀 Tracking launch — click empty space… (use camera presets to break away)', 2600);
+        this.ui.toast('🚀 Tracking launch — use a camera preset to break away', 2600);
       } else if (active < 0 && this.follow && this.follow.kind === 'rocket') {
         this.setFollow(null);
       }
@@ -455,9 +464,17 @@ class Game {
         this.setFollow(null);
       }
     }
-    // camera tween
+    // camera tween (re-anchored to the live follow target so rotating/
+    // orbiting bodies are tracked smoothly mid-flight)
     if (this.camTween) {
       const tw = this.camTween;
+      if (this.follow && tw.off) {
+        const anchor = this.followAnchor(new THREE.Vector3(), 0);
+        if (anchor) {
+          tw.toTg.copy(anchor);
+          tw.toPos.copy(anchor).add(tw.off);
+        }
+      }
       tw.t += dtReal / tw.dur;
       const k = tw.t >= 1 ? 1 : (tw.t < 0.5 ? 4 * tw.t ** 3 : 1 - Math.pow(-2 * tw.t + 2, 3) / 2);
       this.camera.position.lerpVectors(tw.fromPos, tw.toPos, k);
@@ -469,8 +486,8 @@ class Game {
     // quake shake
     if (this.shake > 0.01) {
       this.shake *= 0.94;
-      this.camera.position.x += (Math.random() - 0.5) * this.shake;
-      this.camera.position.y += (Math.random() - 0.5) * this.shake;
+      this.camera.position.x += (Math.random() - 0.5) * this.shake * WORLD_SCALE;
+      this.camera.position.y += (Math.random() - 0.5) * this.shake * WORLD_SCALE;
     }
 
     // dynamic depth range for seamless surface→system zoom
@@ -506,24 +523,21 @@ class Game {
   updateKeys(dt) {
     const k = this.keys;
     if (!k.size) return;
-    const dist = this.camera.position.distanceTo(this.controls.target);
-    const sp = dist * 1.1 * dt * (k.has('ShiftLeft') || k.has('ShiftRight') ? 3.5 : 1);
-    const fwd = this.controls.target.clone().sub(this.camera.position).normalize();
-    const right = new THREE.Vector3().crossVectors(fwd, this.camera.up).normalize();
-    const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
-    const mv = new THREE.Vector3();
-    if (k.has('KeyW')) mv.add(fwd);
-    if (k.has('KeyS')) mv.sub(fwd);
-    if (k.has('KeyD')) mv.add(right);
-    if (k.has('KeyA')) mv.sub(right);
-    if (k.has('KeyE')) mv.add(up);
-    if (k.has('KeyQ')) mv.sub(up);
-    if (mv.lengthSq() > 0) {
-      mv.normalize().multiplyScalar(sp);
-      this.camera.position.add(mv);
-      this.controls.target.add(mv);
-      if (this.follow && mv.length() > dist * 0.05) this.setFollow(null);
-    }
+    // orbit around the tracked body (camera always faces it): WASD/arrows slew,
+    // Q/E zoom. Never pans away from the lock.
+    const off = this.camera.position.clone().sub(this.controls.target);
+    const sph = new THREE.Spherical().setFromVector3(off);
+    const fast = (k.has('ShiftLeft') || k.has('ShiftRight')) ? 3 : 1;
+    const rot = dt * 0.55 * fast;
+    if (k.has('KeyA') || k.has('ArrowLeft')) sph.theta -= rot;
+    if (k.has('KeyD') || k.has('ArrowRight')) sph.theta += rot;
+    if (k.has('KeyW') || k.has('ArrowUp')) sph.phi = clamp(sph.phi - rot * 0.7, 0.03, Math.PI - 0.03);
+    if (k.has('KeyS') || k.has('ArrowDown')) sph.phi = clamp(sph.phi + rot * 0.7, 0.03, Math.PI - 0.03);
+    const zr = dt * 1.6 * fast;
+    if (k.has('KeyE') || k.has('Equal')) sph.radius = clamp(sph.radius * (1 - zr), this.controls.minDistance, this.controls.maxDistance);
+    if (k.has('KeyQ') || k.has('Minus')) sph.radius = clamp(sph.radius * (1 + zr), this.controls.minDistance, this.controls.maxDistance);
+    this.camTween = null;
+    this.camera.position.copy(this.controls.target).add(new THREE.Vector3().setFromSpherical(sph));
   }
 }
 

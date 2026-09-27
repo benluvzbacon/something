@@ -5,7 +5,10 @@
 // ---------------------------------------------------------------------------
 import { RNG, Simplex, fbm, ridged, clamp, lerp, smoothstep, TAU } from './noise.js';
 
-export const PLANET_R = 100;
+export const PLANET_R = 160;
+// World-size multiplier vs. the original 100-unit planet. All surface-attached
+// model sizes (buildings, creatures, effects…) scale by this.
+export const WORLD_SCALE = PLANET_R / 100;
 
 // Biome ids
 export const B = {
@@ -165,8 +168,9 @@ export class PlanetData {
   }
 
   heightRadius(e) {
-    if (e <= 0) return PLANET_R + Math.max(e, -1.2) * 4.0 - 0.30;
-    return PLANET_R + e * 8.0 + 0.14;
+    const S = WORLD_SCALE;
+    if (e <= 0) return PLANET_R + Math.max(e, -1.2) * 4.0 * S - 0.30 * S;
+    return PLANET_R + e * 8.0 * S + 0.14 * S;
   }
 
   // Base surface color (linear 0..1) with natural variation + god-power paints
