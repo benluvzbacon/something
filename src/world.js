@@ -596,8 +596,8 @@ export class World {
       const loss = dt * 0.02 * (0.5 + civ.personality.aggr);
       civ.rural *= (1 - loss * 0.5);
       for (const id of civ.cities) { const c = this.cityById(id); if (c) c.pop *= (1 - loss * 0.4); }
-      // border skirmish: cell may flip
-      if (this.rng.chance(dt * 0.8)) {
+      // border skirmish: cells may flip (both sides tick, so wars visibly move borders)
+      if (this.rng.chance(dt * 1.6)) {
         const border = this.borderCells(civ, foe);
         if (border.length && (myMil / Math.max(1, foMil)) > this.rng.range(0.4, 1.4)) {
           const idx = this.rng.pick(border);
@@ -623,7 +623,7 @@ export class World {
         }
       }
       // war exhaustion → peace
-      const exhaust = w.years > 6 + (1 - civ.personality.aggr) * 14;
+      const exhaust = w.years > 10 + (1 - civ.personality.aggr) * 20;
       if (exhaust || foe.rural < 20) {
         this.makePeace(civ, foe, 'treaty');
       }
@@ -655,17 +655,31 @@ export class World {
     // expansion + founding
     for (const civ of this.civs) {
       if (!civ.alive) continue;
+      // rump-state recovery: no land left → rally around surviving cities or perish
+      if (civ.territory.length === 0) {
+        for (const id of civ.cities) {
+          const hc = this.cityById(id);
+          if (hc) this.claimCell(civ, hc.cell);
+        }
+        if (civ.territory.length === 0) {
+          civ.alive = false;
+          this.log(`Year ${Math.floor(this.year)} — ${this.fullCivName(civ)} is wiped from the map.`, 'war', civ.id);
+          continue;
+        }
+      }
       // expansion pressure (cooldown-paced so borders creep instead of flooding)
       const ruralCapNow = Math.max(60, ERAS[civ.era].rural * (4 + 2 * Math.sqrt(Math.max(0, civ._fert || 1))));
       const pressure = civ.rural / ruralCapNow;
       const softCap = 14 + civ.era * 12;
-      if (civ._expandIn === undefined) civ._expandIn = r.range(1, 3);
+      if (civ._expandIn === undefined) civ._expandIn = r.range(0.6, 1.6);
       civ._expandIn -= dt;
       if (civ._expandIn <= 0) {
-        civ._expandIn = r.range(1.2, 3.8) / (0.5 + civ.personality.exp) / (0.6 + Math.min(1.5, pressure));
+        civ._expandIn = r.range(0.8, 2.2) / (0.5 + civ.personality.exp) / (0.6 + Math.min(1.5, pressure));
         if (civ.territory.length > softCap * 2.2 && r.chance(0.7)) {
           // overextended: restless provinces rather than new conquests
         } else {
+        // claim a batch so borders advance in visible chunks, not single cells
+        const batch = 1 + (pressure > 0.7 ? 1 : 0) + (civ.era >= 3 ? 1 : 0) + (civ.era >= 6 ? 1 : 0) + (civ.personality.exp > 0.7 ? 1 : 0);
         const cand = [];
         for (const ti of civ.territory) {
           for (const n of this.cells[ti].neighbor) {
@@ -681,19 +695,42 @@ export class World {
         }
         if (cand.length) {
           cand.sort((a, b) => this.cells[b].habit - this.cells[a].habit);
-          const pick = cand[(r.next() * r.next() * Math.min(6, cand.length)) | 0];
-          this.claimCell(civ, pick);
-          civ.rural = Math.max(8, civ.rural - 4);
+          const pool = Math.min(cand.length, 4 + batch * 2);
+          const claimed = [];
+          for (let k = 0; k < batch && claimed.length < pool; k++) {
+            const pick = cand[(r.next() * r.next() * pool) | 0];
+            if (this.cells[pick].owner === civ.id) continue;
+            this.claimCell(civ, pick);
+            claimed.push(pick);
+            civ.rural = Math.max(8, civ.rural - 4);
+          }
+          // settler party: a new frontier town on the fresh border
+          if (claimed.length && civ.cities.length < 14 && civ.rural > 60 && r.chance(0.25 + civ.personality.exp * 0.2)) {
+            const spots = claimed.map((t) => this.cells[t]).filter((c) => c.city == null && c.habit > 0.4);
+            if (spots.length) {
+              const s = spots[0];
+              const city = this.foundCity(civ, s.idx);
+              if (city) {
+                for (const n of s.neighbor) {
+                  const c = this.cells[n];
+                  if (!c.ocean && c.owner === -1 && c.biome !== B.ICE) this.claimCell(civ, n);
+                }
+                this.log(`Year ${Math.floor(this.year)} — Settlers from ${civ.name} found the frontier town of ${city.name}.`, 'civ', civ.id, s.idx);
+              }
+            }
+          }
         }
         }
       }
-      // overseas colonization (renaissance+ naval civs)
-      if (civ.era >= 5 && civ.traits.naval > 0.2 && r.chance(0.10 * civ.personality.exp)) {
-        const spots = this.cells.filter((c) => !c.ocean && c.owner === -1 && c.habit > 0.6 && c.coast);
+      // overseas colonization (medieval+ seafarers; industrial+ anyone with a coast)
+      const coastal = civ.territory.some((t) => this.cells[t].coast);
+      const colonizeDrive = civ.era >= 6 ? 0.22 : civ.traits.naval > 0.2 ? 0.16 * (0.4 + civ.personality.exp) : 0;
+      if (coastal && civ.era >= 4 && colonizeDrive > 0 && r.chance(colonizeDrive)) {
+        const spots = this.cells.filter((c) => !c.ocean && c.owner === -1 && c.habit > 0.5 && c.coast);
         if (spots.length) {
           const s = r.pick(spots);
           this.claimCell(civ, s.idx);
-          for (const n of s.neighbor.slice(0, 3)) {
+          for (const n of s.neighbor) {
             if (!this.cells[n].ocean && this.cells[n].owner === -1) this.claimCell(civ, n);
           }
           this.log(`Year ${Math.floor(this.year)} — ${this.fullCivName(civ)} founds an overseas colony.`, 'civ', civ.id, s.idx);
@@ -712,6 +749,32 @@ export class World {
           const city = this.foundCity(civ, s.idx);
           if (city) {
             this.log(`Year ${Math.floor(this.year)} — The city of ${city.name} is founded by ${this.fullCivName(civ)}.`, 'civ', civ.id, s.idx);
+          }
+        }
+      }
+      // peacetime border drift: frontier towns defect toward stronger neighbors
+      if (civ.territory.length && r.chance(0.10 + civ.personality.exp * 0.08)) {
+        const ti = r.pick(civ.territory);
+        const cell = this.cells[ti];
+        let best = null, bestPull = 0;
+        for (const n of cell.neighbor) {
+          const nc = this.cells[n];
+          if (nc.ocean || nc.owner === -1 || nc.owner === civ.id) continue;
+          const foe = this.civs[nc.owner];
+          if (!foe || !foe.alive || civ.wars.some((w) => w.foe === foe.id)) continue;
+          if (cell.city != null && cell.city === civ.capital) continue;
+          const pull = (foe.tech - civ.tech) / 500 + (foe.era - civ.era) * 6 + r.range(-6, 3);
+          if (pull > bestPull) { bestPull = pull; best = foe; }
+        }
+        if (best && bestPull > 4) {
+          this.claimCell(best, ti);
+          const driftCity = cell.city != null ? this.cityById(cell.city) : null;
+          if (driftCity && driftCity.civ === civ.id) {
+            civ.cities = civ.cities.filter((x) => x !== driftCity.id);
+            driftCity.civ = best.id;
+            best.cities.push(driftCity.id);
+            this.viewsDirty.cities = true;
+            this.log(`Year ${Math.floor(this.year)} — ${driftCity.name} defects from ${civ.name} to ${best.name}.`, 'civ', best.id, ti);
           }
         }
       }
@@ -752,7 +815,7 @@ export class World {
       a.relations[b.id] = rel; b.relations[a.id] = rel;
       const atWar = a.wars.some((w) => w.foe === b.id);
 
-      if (!atWar && rel < -55 && shareBorder && r.chance(0.10 + a.personality.aggr * 0.12 + b.personality.aggr * 0.06)) {
+      if (!atWar && rel < -45 && shareBorder && r.chance(0.16 + a.personality.aggr * 0.18 + b.personality.aggr * 0.08)) {
         // declare war
         a.wars.push({ foe: b.id, years: 0 });
         b.wars.push({ foe: a.id, years: 0 });

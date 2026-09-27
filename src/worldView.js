@@ -1409,7 +1409,7 @@ export class WorldView {
       this.lastCityBuild = this.time;
       this.rebuildCities();
     }
-    if (this.world.viewsDirty.territory && this.time - this.lastTerrBuild > 2.2) {
+    if (this.world.viewsDirty.territory && this.time - this.lastTerrBuild > 1.0) {
       this.world.viewsDirty.territory = false;
       this.lastTerrBuild = this.time;
       this.rebuildTerritory();
