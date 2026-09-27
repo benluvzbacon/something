@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { TAU, clamp } from './noise.js';
-import { ERAS, SPACE_STAGES, fmtPop, B, BIOME_INFO } from './world.js';
+import { ERAS, SPACE_STAGES, fmtPop, B, BIOME_INFO, PLANET_R, WORLD_SCALE, ROTATION_SECONDS } from './world.js';
 
 export const GOD_POWERS = [
   { id: 'inspect', icon: '🔍', name: 'Inspect', hint: 'Click anything to inspect it' },
@@ -77,6 +77,9 @@ export class UI {
           <button id="btn-help" class="btn" title="Help & controls">?</button>
         </div>
       </div>
+
+      <div class="daypill glass" id="daypill">☀️ Day</div>
+      <div class="eventbanner hidden" id="eventbanner"></div>
 
       <div class="godbar glass" id="godbar"></div>
 
@@ -509,7 +512,7 @@ export class UI {
   updateLabels() {
     const layer = document.querySelector('#labels');
     const g = this.game;
-    const show = this.showLabels && g.camDistToPlanet() < 1400;
+    const show = this.showLabels && g.camDistToPlanet() < 1400 * WORLD_SCALE;
     // pick capitals + big cities
     let cities = [];
     if (show) {
@@ -529,27 +532,47 @@ export class UI {
     }
     const pp = g.planetView.planetWorldPos(new THREE.Vector3());
     const camDir = g.camera.position.clone().sub(pp).normalize();
+    const place = (d, wp) => {
+      const dirW = wp.clone().sub(pp).normalize();
+      if (dirW.dot(camDir) < 0.12) { d.style.display = 'none'; return false; }
+      const sp = wp.clone().project(g.camera);
+      if (sp.z > 1) { d.style.display = 'none'; return false; }
+      const x = (sp.x * 0.5 + 0.5) * innerWidth;
+      const y = (-sp.y * 0.5 + 0.5) * innerHeight;
+      d.style.display = 'block';
+      d.style.transform = `translate(${x.toFixed(0)}px,${y.toFixed(0)}px) translate(-50%,-140%)`;
+      return true;
+    };
     for (let i = 0; i < this.labelPool.length; i++) {
       const d = this.labelPool[i];
       if (i >= cities.length) { d.style.display = 'none'; continue; }
       const city = cities[i];
       const wp = g.worldView.cityWorldPos(city, new THREE.Vector3());
-      const dirW = wp.clone().sub(pp).normalize();
-      const facing = dirW.dot(camDir);
-      if (facing < 0.12) { d.style.display = 'none'; continue; }
-      const sp = wp.clone().project(g.camera);
-      if (sp.z > 1) { d.style.display = 'none'; continue; }
-      const x = (sp.x * 0.5 + 0.5) * innerWidth;
-      const y = (-sp.y * 0.5 + 0.5) * innerHeight;
-      const civ = this.world.civs[city.civ];
-      d.style.display = 'block';
-      d.style.transform = `translate(${x.toFixed(0)}px,${y.toFixed(0)}px) translate(-50%,-140%)`;
+      if (!place(d, wp)) continue;
       d.dataset.city = city.id;
+      const civ = this.world.civs[city.civ];
       const isCap = civ && city.id === civ.capital;
-      d.innerHTML = `<span class="ldot" style="background:${civ ? civ.colorCss : '#fff'}"></span>${isCap ? '👑 ' : ''}${city.name} <span class="dim">${fmtPop(city.pop)}</span>`;
+      d.innerHTML = `<div><span class="lx">⚔️</span><span class="lname" style="color:${civ ? civ.colorCss : '#fff'}">${isCap ? '👑' : ''}${city.name}</span></div><div class="lsub">${fmtPop(city.pop)} · ${ERAS[civ ? civ.era : 0].name}</div>`;
     }
-    // sun / moon labels when orbit overlay on
-    // (kept minimal: handled by title tooltips on preset bar)
+    // battle callouts ("Zisa ⚔️ 68 fighting")
+    if (!this.blabelPool) this.blabelPool = [];
+    while (this.blabelPool.length < 8) {
+      const d = document.createElement('div');
+      d.className = 'blabel';
+      d.style.display = 'none';
+      layer.appendChild(d);
+      this.blabelPool.push(d);
+    }
+    g.worldView.spin.updateWorldMatrix(true, false);
+    for (let i = 0; i < this.blabelPool.length; i++) {
+      const d = this.blabelPool[i];
+      const b = show ? this.world.battles[i] : null;
+      if (!b) { d.style.display = 'none'; continue; }
+      const wp = new THREE.Vector3(b.dir.x, b.dir.y, b.dir.z).multiplyScalar(PLANET_R + 4 * WORLD_SCALE);
+      wp.applyMatrix4(g.worldView.spin.matrixWorld);
+      if (!place(d, wp)) continue;
+      d.textContent = `${b.a} ⚔️ ${b.n} fighting`;
+    }
   }
 
   // -- per-frame ----------------------------------------------------------------------------
@@ -569,6 +592,23 @@ export class UI {
     this.el('#moon-phase').textContent = `🌙 ${g.planetView.moonPhaseName()}`;
     this.el('#eclipse-warn').classList.toggle('hidden', !g.planetView.eclipse);
     if (g.planetView.eclipse) this.el('#eclipse-warn').textContent = g.planetView.eclipse === 'solar' ? '☀️ SOLAR ECLIPSE' : '🌙 LUNAR ECLIPSE';
+    // day/night pill with countdown ("☀ Day · sunset in 1:51")
+    const fmtT = (sec) => {
+      sec = Math.max(0, Math.round(sec));
+      if (sec >= 3600) return `${Math.floor(sec / 3600)}h${String(Math.floor(sec % 3600 / 60)).padStart(2, '0')}`;
+      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    };
+    let pill;
+    if (g.warp === 0) pill = `${ph < 0.53 ? '☀️ Day' : '🌙 Night'} · paused`;
+    else {
+      const per = ROTATION_SECONDS / g.warp;
+      if (ph < 0.44) pill = `☀️ Day · sunset in ${fmtT((0.44 - ph) * per)}`;
+      else if (ph < 0.53) pill = `🌅 Sunset · nightfall in ${fmtT((0.53 - ph) * per)}`;
+      else if (ph < 0.97) pill = `🌙 Night · sunrise in ${fmtT((1 - ph) * per)}`;
+      else pill = `🌅 Sunrise · daybreak in ${fmtT(((1 - ph) + 0.06) * per)}`;
+    }
+    const pillEl = this.el('#daypill');
+    if (pillEl.textContent !== pill) pillEl.textContent = pill;
     this.el('#st-pop').textContent = fmtPop(w.worldPop());
     this.el('#st-civ').textContent = w.civs.filter((c) => c.alive).length;
     this.el('#st-moon').textContent = fmtPop(w.moon.pop);
@@ -588,6 +628,18 @@ export class UI {
       this.accMed = 0;
       this.renderTicker();
       this.drawMinimap();
+      // headline banner for major events (wars, eras, space, disasters)
+      const majors = this.world.ticker.filter((e) => ['war', 'era', 'space', 'disaster'].includes(e.kind));
+      const newest = majors[majors.length - 1];
+      if (newest && newest.id !== this.bannerId) {
+        this.bannerId = newest.id;
+        const b = this.el('#eventbanner');
+        const icon = { war: '⚔️', era: '🌟', space: '🚀', disaster: '🌋' }[newest.kind] || '📯';
+        b.innerHTML = `<span class="blogdot" style="background:${KIND_COLOR[newest.kind] || '#fff'}"></span><span>${icon}</span><span>${newest.text}</span>`;
+        b.classList.remove('hidden');
+        clearTimeout(this._bannerT);
+        this._bannerT = setTimeout(() => b.classList.add('hidden'), 7000);
+      }
     }
     // slow: active tab refresh
     this.accSlow += dtReal;

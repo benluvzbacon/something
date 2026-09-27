@@ -9,8 +9,8 @@ import { PLANET_R, WORLD_SCALE, ROTATION_SECONDS } from './world.js';
 
 const PS = WORLD_SCALE;
 
-export const MOON_R = 34;
-export const MOON_DIST = 530;
+export const MOON_R = 62;
+export const MOON_DIST = 1000;
 export const MOON_SCALE = MOON_R / 22;
 export const MOON_PERIOD = 300;          // seconds per lunar orbit at 1x
 export const ORBIT_DIST = 2600;          // planet→sun distance
@@ -252,8 +252,8 @@ export class PlanetView {
           float w2 = sin(vL.x*160.0 - uTime*2.2) * sin(vL.z*140.0 + uTime*1.7);
           N = normalize(N + vec3(w1*0.045 + w2*0.02));
           float fres = pow(1.0 - max(dot(N,V),0.0), 2.2);
-          vec3 deep = vec3(0.015,0.10,0.26);
-          vec3 shal = vec3(0.10,0.36,0.48);
+          vec3 deep = vec3(0.02,0.22,0.62);
+          vec3 shal = vec3(0.16,0.52,0.82);
           vec3 col = mix(deep, shal, fres*0.85 + 0.08);
           // sun specular glint
           vec3 R = reflect(-normalize(uSunDir), N);

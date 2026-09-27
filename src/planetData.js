@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 import { RNG, Simplex, fbm, ridged, clamp, lerp, smoothstep, TAU } from './noise.js';
 
-export const PLANET_R = 160;
+export const PLANET_R = 300;
 // World-size multiplier vs. the original 100-unit planet. All surface-attached
 // model sizes (buildings, creatures, effects…) scale by this.
 export const WORLD_SCALE = PLANET_R / 100;
@@ -185,6 +185,11 @@ export class PlanetData {
       const k = smoothstep(0.42, 0.68, s.elevation) * 0.55;
       r = lerp(r, 0.44, k); g = lerp(g, 0.40, k); b = lerp(b, 0.36, k);
     }
+    // vivid stylized grade (reference look): boost saturation
+    const avg = (r + g + b) / 3;
+    r = clamp(avg + (r - avg) * 1.28, 0, 1);
+    g = clamp(avg + (g - avg) * 1.28, 0, 1);
+    b = clamp(avg + (b - avg) * 1.28, 0, 1);
     // Paint overlays
     for (let i = 0; i < this.paints.length; i++) {
       const pt = this.paints[i];

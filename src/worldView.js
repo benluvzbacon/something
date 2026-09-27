@@ -148,6 +148,8 @@ export class WorldView {
     this.buildTerritory();
     this.buildLights();
     this.buildRings();
+    this.buildRoutes();
+    this.lastRouteSync = -10;
     this.buildAnimals();
     this.buildCitizens();
     this.buildRockets();
@@ -499,37 +501,111 @@ export class WorldView {
     this.nightLights.geometry.attributes.position.needsUpdate = true;
   }
 
-  // -- territory dots ---------------------------------------------------------------
+  // -- territory blobs (reference look: filled nations + dark borders) ---------------
+  // A data texture in the terrain's UV space tints owned land with civ colors.
+  // Rebuilt in milliseconds on territory change; injected into the terrain
+  // shader so blobs hug the surface, rotate with the planet, and shade at night.
   buildTerritory() {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(3), 3));
-    const mat = new THREE.PointsMaterial({ size: 1.5 * S, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, sizeAttenuation: true });
-    this.terrPts = new THREE.Points(geo, mat);
-    this.terrPts.frustumCulled = false;
-    this.terrPts.renderOrder = 5;
-    this.spin.add(this.terrPts);
+    this.terrW = 512; this.terrH = 256;
+    const W = this.terrW, H = this.terrH;
+    this.terrData = new Uint8Array(W * H * 4);
+    // texel -> nearest cell (stamp discs once; inverted nearest search)
+    this.terrCell = new Int32Array(W * H).fill(-1);
+    const dist = new Float32Array(W * H).fill(1e9);
+    for (const cell of this.world.cells) {
+      const theta = Math.acos(clamp(cell.dir.y, -1, 1));
+      let phi = Math.atan2(cell.dir.z, -cell.dir.x);
+      if (phi < 0) phi += TAU;
+      const cu = (phi / TAU) * W;
+      const cv = (1 - theta / Math.PI) * H;
+      const rad = 9;
+      for (let dy = -rad; dy <= rad; dy++) {
+        const py = Math.round(cv + dy);
+        if (py < 0 || py >= H) continue;
+        for (let dx = -rad; dx <= rad; dx++) {
+          const dd = Math.sqrt(dx * dx + dy * dy);
+          if (dd > rad) continue;
+          let px = Math.round(cu + dx) % W;
+          if (px < 0) px += W;
+          const ti = py * W + px;
+          if (dd < dist[ti]) { dist[ti] = dd; this.terrCell[ti] = cell.idx; }
+        }
+      }
+    }
+    this.terrTex = new THREE.DataTexture(this.terrData, W, H, THREE.RGBAFormat);
+    this.terrTex.colorSpace = THREE.SRGBColorSpace;
+    this.terrTex.magFilter = THREE.LinearFilter;
+    this.terrTex.minFilter = THREE.LinearFilter;
+    this.terrTex.needsUpdate = true;
+    // inject blob sampling into the terrain material
+    const terrTex = this.terrTex;
+    this.pv.terrainMesh.material.onBeforeCompile = (sh) => {
+      sh.uniforms.uTerr = { value: terrTex };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vTerrUv;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrUv = uv;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uTerr;\nvarying vec2 vTerrUv;')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          vec4 terr = texture2D(uTerr, vTerrUv);
+          if (terr.a > 0.02) {
+            float border = (terr.a > 0.25 && terr.a < 0.92) ? 1.0 : 0.0;
+            vec3 tint = mix(terr.rgb, vec3(0.04,0.02,0.06), border * 0.8);
+            diffuseColor.rgb = mix(diffuseColor.rgb, tint, border > 0.5 ? 0.9 : 0.78);
+          }
+        }`);
+    };
+    this.pv.terrainMesh.material.needsUpdate = true;
+    this.rebuildTerritory();
   }
 
   rebuildTerritory() {
-    const pos = [], col = [];
+    const W = this.terrW, H = this.terrH, D = this.terrData;
     const c = new THREE.Color();
-    for (const cell of this.world.cells) {
-      if (cell.owner === -1 || cell.ocean) continue;
-      const civ = this.world.civs[cell.owner];
-      if (!civ || !civ.alive) continue;
-      const h = this.surfH(cell.elev) + 0.7 * S;
-      pos.push(cell.dir.x * (PLANET_R + h), cell.dir.y * (PLANET_R + h), cell.dir.z * (PLANET_R + h));
-      c.setHex(civ.color);
-      col.push(c.r, c.g, c.b);
+    const owner = this._terrOwner || (this._terrOwner = new Int16Array(W * H));
+    // pass 1: owner colors (unowned texels stay white so filtered edges glow)
+    for (let i = 0; i < W * H; i++) {
+      const ci = this.terrCell[i];
+      let o = -1;
+      if (ci >= 0) {
+        const cell = this.world.cells[ci];
+        if (!cell.ocean && cell.owner !== -1 && this.world.civs[cell.owner]?.alive) o = cell.owner;
+      }
+      owner[i] = o;
+      if (o >= 0) {
+        c.setHex(this.world.civs[o].color);
+        D[i * 4] = c.r * 255; D[i * 4 + 1] = c.g * 255; D[i * 4 + 2] = c.b * 255;
+      } else {
+        D[i * 4] = 255; D[i * 4 + 1] = 255; D[i * 4 + 2] = 255;
+      }
+      D[i * 4 + 3] = 0;
     }
-    this.terrPts.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos.length ? pos : [0, 0, 0]), 3));
-    this.terrPts.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col.length ? col : [0, 0, 0]), 3));
+    // pass 2: interior vs. border ring (border = owned texel near foreign land)
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const o = owner[i];
+        if (o < 0) continue;
+        let foreign = false;
+        for (let dy = -2; dy <= 2 && !foreign; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= H) continue;
+          for (let dx = -2; dx <= 2; dx++) {
+            let xx = x + dx;
+            if (xx < 0) xx += W; else if (xx >= W) xx -= W;
+            if (owner[yy * W + xx] !== o) { foreign = true; break; }
+          }
+        }
+        D[i * 4 + 3] = foreign ? 140 : 255;
+      }
+    }
+    this.terrTex.needsUpdate = true;
   }
 
   // -- city rings ---------------------------------------------------------------------
   buildRings() {
-    const geo = new THREE.RingGeometry(1.1 * S, 1.45 * S, 40);
+    const geo = new THREE.RingGeometry(1.1, 1.45, 40); // scaled by world-unit spread
     const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
     this.rings = new THREE.InstancedMesh(geo, mat, 220);
     this.rings.frustumCulled = false;
@@ -1005,6 +1081,63 @@ export class WorldView {
     this.baseGroup.add(new THREE.Points(lg, lm));
   }
 
+  // -- route arcs (red war links, amber trade links between capitals) --------------------
+  buildRoutes() {
+    this.routeGroup = new THREE.Group();
+    this.spin.add(this.routeGroup);
+  }
+
+  syncRoutes() {
+    while (this.routeGroup.children.length) {
+      const l = this.routeGroup.children.pop();
+      l.geometry.dispose(); l.material.dispose();
+    }
+    const world = this.world;
+    const lines = [];
+    const seen = new Set();
+    for (const civ of world.civs) {
+      if (!civ.alive) continue;
+      for (const w of civ.wars) {
+        const foe = world.civs[w.foe];
+        if (!foe || !foe.alive) continue;
+        const key = civ.id < foe.id ? civ.id * 100 + foe.id : foe.id * 100 + civ.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const a = world.capitalOf(civ), b = world.capitalOf(foe);
+        if (a && b) lines.push({ a: a.dir, b: b.dir, war: true });
+      }
+    }
+    const alive = world.civs.filter((c) => c.alive);
+    let tn = 0;
+    for (let i = 0; i < alive.length && tn < 10; i++) {
+      for (let j = i + 1; j < alive.length && tn < 10; j++) {
+        const A = alive[i], B2 = alive[j];
+        if ((A.relations[B2.id] ?? 0) > 35) {
+          const a = world.capitalOf(A), b = world.capitalOf(B2);
+          if (a && b) { lines.push({ a: a.dir, b: b.dir, war: false }); tn++; }
+        }
+      }
+    }
+    for (const L of lines.slice(0, 26)) {
+      const a = this.localPos(L.a, 1.5 * S, new THREE.Vector3());
+      const b = this.localPos(L.b, 1.5 * S, new THREE.Vector3());
+      const dist = a.distanceTo(b);
+      const mid = a.clone().add(b).multiplyScalar(0.5).normalize().multiplyScalar(PLANET_R + 1.5 * S + dist * 0.22);
+      const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+      const g = new THREE.BufferGeometry().setFromPoints(curve.getPoints(32));
+      const m = new THREE.LineBasicMaterial({
+        color: L.war ? 0xff3a22 : 0xffa040, transparent: true,
+        opacity: L.war ? 0.85 : 0.30, blending: THREE.AdditiveBlending,
+        depthWrite: false, fog: false,
+      });
+      const line = new THREE.Line(g, m);
+      line.frustumCulled = false;
+      line.renderOrder = 6;
+      line.userData.war = L.war;
+      this.routeGroup.add(line);
+    }
+  }
+
   // -- particle effects -------------------------------------------------------------------------------
   buildEffects() {
     this.effects = [];
@@ -1111,7 +1244,7 @@ export class WorldView {
   // -- selection ring -----------------------------------------------------------------------------------
   buildSelection() {
     this.selRing = new THREE.Mesh(
-      new THREE.RingGeometry(1.6 * S, 1.9 * S, 48),
+      new THREE.RingGeometry(1.6, 1.9, 48),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, fog: false })
     );
     this.selRing.visible = false;
@@ -1120,7 +1253,7 @@ export class WorldView {
     this.selDir = null;
   }
 
-  setSelection(dirLocal, scale = 2.5, color = 0xffffff) {
+  setSelection(dirLocal, scale = 2.5 * S, color = 0xffffff) { // scale in world units
     if (!dirLocal) { this.selRing.visible = false; this.selDir = null; return; }
     this.selDir = dirLocal.clone ? dirLocal.clone() : new THREE.Vector3(dirLocal.x, dirLocal.y, dirLocal.z);
     this.selRing.visible = true;
@@ -1186,6 +1319,10 @@ export class WorldView {
     }
     if (this.time - this.lastStormSync > 0.5) { this.lastStormSync = this.time; this.syncStorms(); }
     if (this.time - this.lastHerdSync > 3.0) { this.lastHerdSync = this.time; this.syncFauna(); }
+    if (this.time - this.lastRouteSync > 3.0) { this.lastRouteSync = this.time; this.syncRoutes(); }
+    for (const l of this.routeGroup.children) {
+      if (l.userData.war) l.material.opacity = 0.62 + 0.3 * Math.sin(this.time * 3.2);
+    }
     this.syncMoonBase();
     this.syncSatellites();
 
@@ -1220,8 +1357,6 @@ export class WorldView {
     this.imCanopy.visible = treesNear;
     this.updateBoats(camDist);
 
-    this.terrPts.material.opacity = camDist > 1200 * S ? 0.0 : camDist > 500 * S ? 0.3 : 0.55;
-    this.terrPts.visible = this.terrPts.material.opacity > 0.01;
     this.rings.material.opacity = camDist > 1500 * S ? 0.25 : 0.85;
 
     this.updateRockets(dtReal, warp);

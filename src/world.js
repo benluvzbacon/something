@@ -94,6 +94,7 @@ export class World {
     this.cities = [];
     this.herds = [];
     this.storms = [];
+    this.battles = []; // active battle callouts {dir,a,b,n,life}
     this.history = [];
     this.ticker = [];
     this.visualQueue = [];   // consumed by the 3D view
@@ -377,6 +378,12 @@ export class World {
     this.tickHerds(dtYears);
     this.tickStorms(dtReal, warp, dtYears);
     this.tickMoon(dtYears);
+    // battle callouts fade in visual time (frozen while paused)
+    const wEff = warp === 0 ? 0 : Math.min(warp, 8);
+    for (let i = this.battles.length - 1; i >= 0; i--) {
+      this.battles[i].life -= dtReal * wEff;
+      if (this.battles[i].life <= 0) this.battles.splice(i, 1);
+    }
 
     // slow strategic tick
     this.slowAcc += dtYears;
@@ -597,6 +604,10 @@ export class World {
           const cell = this.cells[idx];
           const oldCity = cell.city != null ? this.cityById(cell.city) : null;
           this.claimCell(civ, idx);
+          // battle callout ("Zisa ⚔️ 68 fighting")
+          const troops = Math.max(12, Math.floor(Math.min(this.civPop(civ), this.civPop(foe)) / 60) + this.rng.int(10, 120));
+          this.battles.push({ dir: { ...cell.dir }, a: civ.name, b: foe.name, n: troops, life: 50 });
+          if (this.battles.length > 8) this.battles.shift();
           if (oldCity && oldCity.civ !== civ.id) {
             // city captured
             const prevOwner = this.civs[oldCity.civ];
@@ -648,10 +659,10 @@ export class World {
       const ruralCapNow = Math.max(60, ERAS[civ.era].rural * (4 + 2 * Math.sqrt(Math.max(0, civ._fert || 1))));
       const pressure = civ.rural / ruralCapNow;
       const softCap = 14 + civ.era * 12;
-      if (civ._expandIn === undefined) civ._expandIn = r.range(2, 5);
+      if (civ._expandIn === undefined) civ._expandIn = r.range(1, 3);
       civ._expandIn -= dt;
       if (civ._expandIn <= 0) {
-        civ._expandIn = r.range(2.0, 5.5) / (0.5 + civ.personality.exp) / (0.6 + Math.min(1.5, pressure));
+        civ._expandIn = r.range(1.2, 3.8) / (0.5 + civ.personality.exp) / (0.6 + Math.min(1.5, pressure));
         if (civ.territory.length > softCap * 2.2 && r.chance(0.7)) {
           // overextended: restless provinces rather than new conquests
         } else {

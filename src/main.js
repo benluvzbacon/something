@@ -164,7 +164,7 @@ class Game {
       if (city && dist < thresh) { this.selectCity(city.id); return; }
       const cellIdx = this.world.nearestCell(dir);
       this.selection = { kind: 'cell', cell: cellIdx };
-      this.worldView.setSelection(new THREE.Vector3(dir.x, dir.y, dir.z), 1.6, 0xffffff);
+      this.worldView.setSelection(new THREE.Vector3(dir.x, dir.y, dir.z), 1.6 * WORLD_SCALE, 0xffffff);
       this.ui.switchTab('inspect');
     } else {
       this.applyGod(dir, wp);
@@ -214,7 +214,7 @@ class Game {
     if (!city) return;
     this.selection = { kind: 'city', city: id, cell: city.cell };
     const civ = this.world.civs[city.civ];
-    this.worldView.setSelection(new THREE.Vector3(city.dir.x, city.dir.y, city.dir.z), (city._spread || 2) + 1.2, civ ? civ.color : 0xffffff);
+    this.worldView.setSelection(new THREE.Vector3(city.dir.x, city.dir.y, city.dir.z), (city._spread || 2 * WORLD_SCALE) + 1.2 * WORLD_SCALE, civ ? civ.color : 0xffffff);
     this.ui.switchTab('inspect');
   }
 
@@ -223,7 +223,7 @@ class Game {
     if (!civ) return;
     const cap = this.world.capitalOf(civ);
     this.selection = { kind: 'civ', civ: id, cell: cap ? cap.cell : null };
-    if (cap) this.worldView.setSelection(new THREE.Vector3(cap.dir.x, cap.dir.y, cap.dir.z), (cap._spread || 2) + 1.6, civ.color);
+    if (cap) this.worldView.setSelection(new THREE.Vector3(cap.dir.x, cap.dir.y, cap.dir.z), (cap._spread || 2 * WORLD_SCALE) + 1.6 * WORLD_SCALE, civ.color);
     else this.worldView.setSelection(null);
   }
 
